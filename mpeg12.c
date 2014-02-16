@@ -20,6 +20,9 @@
 #include <string.h>
 #include "vdpau_private.h"
 #include "ve.h"
+#include <time.h>
+
+extern uint64_t get_time();
 
 static int mpeg_find_startcode(const uint8_t *data, int len)
 {
@@ -47,6 +50,8 @@ static int mpeg_find_startcode(const uint8_t *data, int len)
 	}
 	return 0;
 }
+static unsigned long num_pics=0;
+static unsigned long num_longs=0;
 
 static VdpStatus mpeg12_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info, const int len, video_surface_ctx_t *output)
 {
@@ -132,7 +137,15 @@ static VdpStatus mpeg12_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_in
 	writel((((decoder->profile == VDP_DECODER_PROFILE_MPEG1) ? 1 : 2) << 24) | 0x8000000f, ve_regs + VE_MPEG_TRIGGER);
 
 	// wait for interrupt
+	++num_pics;
+uint64_t tv, tv2;
+	tv = get_time();
 	ve_wait(1);
+	tv2 = get_time();
+	if (tv2-tv > 1000000) {
+		printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+		}
+	
 
 	// clean interrupt flag
 	writel(0x0000c00f, ve_regs + VE_MPEG_STATUS);

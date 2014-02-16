@@ -22,6 +22,9 @@
 #include <unistd.h>
 #include "vdpau_private.h"
 #include "ve.h"
+#include <time.h>
+
+extern uint64_t get_time(void);
 
 static int find_startcode(const uint8_t *data, int len, int start)
 {
@@ -550,6 +553,8 @@ static void fill_frame_lists(h264_context_t *c)
 	// sort reference frame list
 	qsort(c->ref_frames, c->ref_count, sizeof(c->ref_frames[0]), &sort_ref_frames);
 }
+unsigned long num_pics=0;
+unsigned long num_longs=0;
 
 // VDPAU does not tell us if the scaling lists are default or custom
 static int check_scaling_lists(h264_context_t *c)
@@ -581,6 +586,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 	c->info = info;
 	c->output = output;
 
+#if 1 
 	if (!c->info->frame_mbs_only_flag)
 	{
 		VDPAU_DBG("We can't decode interlaced Frames yet! Sorry");
@@ -604,6 +610,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 	// activate H264 engine
 	writel((readl(c->regs + VE_CTRL) & ~0xf) | 0x1
 		| (decoder->width >= 2048 ? (0x1 << 21) : 0x0), c->regs + VE_CTRL);
+#endif
 
 	// some buffers
 	uint32_t extra_buffers = ve_virt2phys(decoder_p->extra_data);
@@ -665,8 +672,11 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 		writel(input_addr + VBV_SIZE - 1, c->regs + VE_H264_VLD_END);
 		writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), c->regs + VE_H264_VLD_ADDR);
 
+#if 1 
+		//if(num_pics == 0)
 		// ?? some sort of reset maybe
 		writel(0x7, c->regs + VE_H264_TRIGGER);
+#endif
 
 		// fill RefPicLists
 		int i;
@@ -682,6 +692,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 
 		decode_slice_header(c);
 
+#if 1 
 		// write RefPicLists
 		if (h->slice_type != SLICE_TYPE_I && h->slice_type != SLICE_TYPE_SI)
 		{
@@ -715,7 +726,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 				writel(list, c->regs + VE_H264_RAM_WRITE_DATA);
 			}
 		}
-
+#endif 
 		// picture parameters
 		writel(((info->entropy_coding_mode_flag & 0x1) << 15)
 			| ((info->num_ref_idx_l0_active_minus1 & 0x1f) << 10)
@@ -770,7 +781,14 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 		// SHOWTIME
 		writel(0x8, c->regs + VE_H264_TRIGGER);
 
+		++num_pics;
+uint64_t tv, tv2;
+		tv = get_time();
 		ve_wait(1);
+		tv2 = get_time();
+		if (tv2-tv > 10000000) {
+			printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+		}
 
 		// clear status flags
 		writel(readl(c->regs + VE_H264_STATUS), c->regs + VE_H264_STATUS);
@@ -778,8 +796,10 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 		pos = (readl(c->regs + VE_H264_VLD_OFFSET) / 8) - 3;
 	}
 
+#if 1 
 	// stop H264 engine
 	writel((readl(c->regs + VE_CTRL) & ~0xf) | 0x7, c->regs + VE_CTRL);
+#endif
 
 	free(c);
 	return VDP_STATUS_OK;

@@ -25,8 +25,9 @@
 #include <sys/ioctl.h>
 #include "sunxi_disp_ioctl.h"
 #include "ve.h"
+#include <errno.h>
 
-static uint64_t get_time(void)
+uint64_t get_time(void)
 {
 	struct timespec tp;
 
@@ -38,7 +39,7 @@ static uint64_t get_time(void)
 
 VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable drawable, VdpPresentationQueueTarget *target)
 {
-	if (!target || !drawable)
+	if (!target /* || !drawable */)
 		return VDP_STATUS_INVALID_POINTER;
 
 	device_ctx_t *dev = handle_get(device);
@@ -74,7 +75,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
 		return VDP_STATUS_RESOURCES;
 	}
 
-	XSetWindowBackground(dev->display, drawable, 0x000102);
+	//XSetWindowBackground(dev->display, drawable, 0x000102);
 
 	__disp_colorkey_t ck;
 	ck.ck_max.red = ck.ck_min.red = 0;
@@ -223,9 +224,9 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 		VDPAU_DBG_ONCE("Presentation time not supported");
 
 	Window c;
-	int x,y;
-	XTranslateCoordinates(q->device->display, q->target->drawable, RootWindow(q->device->display, q->device->screen), 0, 0, &x, &y, &c);
-	XClearWindow(q->device->display, q->target->drawable);
+	int x=0,y=0;
+	//XTranslateCoordinates(q->device->display, q->target->drawable, RootWindow(q->device->display, q->device->screen), 0, 0, &x, &y, &c);
+	//XClearWindow(q->device->display, q->target->drawable);
 
 	__disp_layer_info_t layer_info;
 	memset(&layer_info, 0, sizeof(layer_info));
@@ -260,9 +261,18 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 	layer_info.fb.addr[1] = ve_virt2phys(os->vs->data + os->vs->plane_size) + 0x40000000;
 	layer_info.fb.addr[2] = ve_virt2phys(os->vs->data + os->vs->plane_size + os->vs->plane_size / 4) + 0x40000000;
 
-	layer_info.fb.cs_mode = DISP_BT601;
+	layer_info.fb.cs_mode = DISP_BT709;
 	layer_info.fb.size.width = os->vs->width;
 	layer_info.fb.size.height = os->vs->height;
+       layer_info.src_win.x = 0;
+       layer_info.src_win.y = 0;
+       layer_info.src_win.width = os->vs->width;
+       layer_info.src_win.height = os->vs->height;
+       layer_info.scn_win.x = 0; //x + os->video_x;
+       layer_info.scn_win.y = 0; //y + os->video_y;
+       layer_info.scn_win.width = 800; //os->video_width;
+       layer_info.scn_win.height = 600, //os->video_height;
+#if 0
 	layer_info.src_win.x = os->video_src_rect.x0;
 	layer_info.src_win.y = os->video_src_rect.y0;
 	layer_info.src_win.width = os->video_src_rect.x1 - os->video_src_rect.x0;
@@ -271,6 +281,7 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 	layer_info.scn_win.y = y + os->video_dst_rect.y0;
 	layer_info.scn_win.width = os->video_dst_rect.x1 - os->video_dst_rect.x0;
 	layer_info.scn_win.height = os->video_dst_rect.y1 - os->video_dst_rect.y0;
+#endif
 	layer_info.ck_enable = 1;
 
 	if (layer_info.scn_win.y < 0)
@@ -283,10 +294,26 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 	}
 
 	uint32_t args[4] = { 0, q->target->layer, (unsigned long)(&layer_info), 0 };
-	ioctl(q->target->fd, DISP_CMD_LAYER_SET_PARA, args);
-
-	ioctl(q->target->fd, DISP_CMD_LAYER_BOTTOM, args);
-	ioctl(q->target->fd, DISP_CMD_LAYER_OPEN, args);
+	int error = ioctl(q->target->fd, DISP_CMD_LAYER_SET_PARA, args);
+	if(error < 0)
+	{
+		printf("set para failed\n");
+	}
+	error = ioctl(q->target->fd, DISP_CMD_LAYER_TOP, args);
+	if(error < 0)
+	{
+		printf("layer top failed\n");
+	}
+	//error = ioctl(q->target->fd, DISP_CMD_VIDEO_START, args);
+	if(error < 0)
+	{
+		printf("video start failed\n");
+	}
+	error = ioctl(q->target->fd, DISP_CMD_LAYER_OPEN, args);
+	if(error < 0)
+	{
+		printf("layer open failed, fd=%d, errno=%d\n", q->target->fd, errno);
+	}
 	// Note: might be more reliable (but slower and problematic when there
 	// are driver issues and the GET functions return wrong values) to query the
 	// old values instead of relying on our internal csc_change.

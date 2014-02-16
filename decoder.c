@@ -20,9 +20,11 @@
 #include <string.h>
 #include "vdpau_private.h"
 #include "ve.h"
+#include <stdio.h>
 
 VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32_t width, uint32_t height, uint32_t max_references, VdpDecoder *decoder)
 {
+	printf("vdpau decoder created\n");
 	device_ctx_t *dev = handle_get(device);
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
@@ -58,9 +60,13 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
 		ret = new_decoder_h264(dec);
 		break;
 
-	case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
+    	case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
 	case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:
-		ret = new_decoder_mp4(dec);
+    	case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
+    	case VDP_DECODER_PROFILE_DIVX4_MOBILE:
+    	case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
+    	case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
+        	ret = new_decoder_mpeg4(dec);
 		break;
 
 	default:
@@ -170,8 +176,12 @@ VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile pro
 	case VDP_DECODER_PROFILE_H264_BASELINE:
 	case VDP_DECODER_PROFILE_H264_MAIN:
 	case VDP_DECODER_PROFILE_H264_HIGH:
-	case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
-	case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:
+    case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
+    case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:    
+    case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
+    case VDP_DECODER_PROFILE_DIVX4_MOBILE:
+    case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
+    case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
 		*is_supported = VDP_TRUE;
 		break;
 

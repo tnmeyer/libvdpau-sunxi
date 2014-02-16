@@ -779,8 +779,14 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 writel((info->trb[1] << 16) | (info->trd[1] << 0), ve_regs + VE_MPEG_TRBTRD_FIELD);
             }
             // set size
-            uint16_t width = (decoder_p->vol_hdr.width + 15) / 16;
+            uint16_t width  = (decoder_p->vol_hdr.width + 15) / 16;
             uint16_t height = (decoder_p->vol_hdr.height + 15) / 16;
+            if(width == 0 || height == 0) {
+                //some videos do not have a VOL, at least at the right time
+                //try with the following parameters
+                width = (decoder->width + 15 / 16)/16;
+                height = (decoder->height + 15 / 16)/16;
+            }
             uint16_t width2 = width;
 #if 1
             if((width2 & 0x1) == 0x0)
@@ -937,7 +943,6 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                         }
                     }
                 }
-                int veCurMBA = readl(ve_regs + VE_MPEG_MBA);
                 writel(readl(ve_regs + VE_MPEG_CTRL) | 0x7C, ve_regs + VE_MPEG_CTRL);            
             }
             // stop MPEG engine
