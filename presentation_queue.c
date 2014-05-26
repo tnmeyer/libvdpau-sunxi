@@ -270,8 +270,8 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
        layer_info.src_win.height = os->vs->height;
        layer_info.scn_win.x = 0; //x + os->video_x;
        layer_info.scn_win.y = 0; //y + os->video_y;
-       layer_info.scn_win.width = 800; //os->video_width;
-       layer_info.scn_win.height = 600, //os->video_height;
+       layer_info.scn_win.width = 1024; //os->video_width;
+       layer_info.scn_win.height = 768, //os->video_height;
 #if 0
 	layer_info.src_win.x = os->video_src_rect.x0;
 	layer_info.src_win.y = os->video_src_rect.y0;

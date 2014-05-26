@@ -147,6 +147,8 @@ static void *const functions[] =
 	[VDP_FUNC_ID_PRESENTATION_QUEUE_BLOCK_UNTIL_SURFACE_IDLE]           = &vdp_presentation_queue_block_until_surface_idle,
 	[VDP_FUNC_ID_PRESENTATION_QUEUE_QUERY_SURFACE_STATUS]               = &vdp_presentation_queue_query_surface_status,
 	[VDP_FUNC_ID_PREEMPTION_CALLBACK_REGISTER]                          = &vdp_preemption_callback_register,
+	[VDP_FUNC_ID_DECODER_SET_VIDEO_CONTROL_DATA]                        = &vdp_decoder_set_video_control_data,
+	[VDP_FUNC_ID_DECODER_RENDERSTREAM]                                  = &vdp_decoder_render_stream
 };
 
 VdpStatus vdp_get_proc_address(VdpDevice device_handle, VdpFuncId function_id, void **function_pointer)

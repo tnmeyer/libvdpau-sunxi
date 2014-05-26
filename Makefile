@@ -1,8 +1,8 @@
 TARGET = libvdpau_sunxi.so.1
 SRC = device.c presentation_queue.c surface_output.c surface_video.c \
 	surface_bitmap.c video_mixer.c decoder.c handles.c ve.c \
-	h264.c mpeg12.c mp4.c
-CFLAGS = -Wall -O3
+	h264.c mpeg12.c mpeg4.c mp4_vld.c mp4_tables.c mp4_block.c msmpeg4.c
+CFLAGS ?= -Wall -O0 -g 
 LDFLAGS =
 LIBS = -lrt
 CC = gcc

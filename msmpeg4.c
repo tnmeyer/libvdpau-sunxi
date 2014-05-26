@@ -1,0 +1,576 @@
+/*
+ * Copyright (c) 2013 Jens Kuske <jenskuske@gmail.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ */
+
+#include <string.h>
+#include "vdpau_private.h"
+#include "ve.h"
+#include <time.h>
+#include <assert.h>
+#include "bitstream.h"
+#include "mpeg4.h"
+#include "stdlib.h"
+#include "mp4_vars.h"
+
+#define MBAC_BITRATE 50*1024
+
+extern uint32_t show_bits(bitstream *bs, int n);
+extern uint32_t get_bits(bitstream *bs, int n);
+extern int bytealign(bitstream *bs);
+extern int  bytealigned(bitstream *bs, int nbit);
+extern void flush_bits(bitstream *bs, int nbit);
+extern int bits_left(bitstream *bs);
+extern int nextbits_bytealigned(bitstream *bs, int nbit);
+
+static void dumpData(char* data)
+{
+    int pos=0;
+    printf("data[%d]=%X data[+1]=%X data[+2]=%X data[+3]=%X data[+4]=%X\n",
+        pos, data[pos], data[pos+1], data[pos+2], data[pos+3],data[pos+4]);
+}
+
+static void msmpeg4_private_free(decoder_ctx_t *decoder)
+{
+	mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
+	ve_free(decoder_p->mbh_buffer);
+	ve_free(decoder_p->dcac_buffer);
+	ve_free(decoder_p->ncf_buffer);
+	free(decoder_p);
+}
+
+static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info, mp4_private_t *priv)
+{
+    int dummy;
+    vop_header_t *h = &priv->vop_header;
+    int code;
+    video_packet_header_t *vh = &priv->pkt_hdr;
+
+
+    if(h->msmpeg4_version==1){
+        int start_code = get_bits(bs, 32);
+        if(start_code!=0x00000100){
+            //av_log(s->avctx, AV_LOG_ERROR, "invalid startcode\n");
+            return -1;
+        }
+
+        get_bits(bs, 5); // frame number */
+    }
+
+    h->vop_coding_type = get_bits(bs, 2) ;
+    if (h->vop_coding_type != VOP_I &&
+        h->vop_coding_type != VOP_P){
+        printf("invalid picture type\n");
+        return -1;
+    }
+
+    h->vop_quant = get_bits(bs, 5);
+    if(h->vop_quant==0){
+        printf( "invalid qscale\n");
+        return -1;
+    }
+
+    if (h->vop_coding_type == VOP_I) {
+        code = get_bits(bs, 5);
+        if(h->msmpeg4_version==1){
+#if 0
+			if(code==0 || code>s->mb_height){
+                av_log(s->avctx, AV_LOG_ERROR, "invalid slice height %d\n", code);
+                return -1;
+            }
+#endif
+            h->slice_height = code;
+        }else{
+            /* 0x17: one slice, 0x18: two slices, ... */
+            if (code < 0x17){
+                printf("error, slice code was %X\n", code);
+                return -1;
+            }
+			h->slice_height = vh->mb_height / (code - 0x16);
+        }
+
+        switch(h->msmpeg4_version){
+        case 0:
+            {
+                int code = show_bits(bs, 2);
+                switch(code) {
+                case 0:
+                case 1:
+                    flush_bits(bs, 1);
+                    h->rl_chroma_table_index = 0;
+                    //vld_intra chroma functions insert here
+                    break;
+                case 2:
+                    h->rl_chroma_table_index = 1;
+                    //vld_intra chroma functions insert here
+                    flush_bits(bs, 2);
+                    break;
+                case 3:
+                    h->rl_chroma_table_index = 2;
+                    //vld_intra chroma functions insert here
+                    flush_bits(bs, 2);
+                    break;
+                default:
+                        break;
+                }
+                code = show_bits(bs, 2);
+                switch(code) {
+                case 0:
+                case 1:
+                    h->rl_table_index = 0;
+                    flush_bits(bs, 1);
+                    //vld_intra lum functions insert here
+                    break;
+                case 2:
+                    h->rl_table_index = 1;
+                    flush_bits(bs, 2);
+                    //vld_intra lum functions insert here
+                    break;
+                case 3:
+                    h->rl_table_index = 2;
+                    flush_bits(bs, 2);
+                    //vld_intra lum functions insert here
+                    break;
+                }
+                int dc_value = get_bits(bs, 1);
+                h->dc_table_index = dc_value;
+                if(dc_value == 0) {
+                        //getDC chroma and lum ptr insert here
+                }
+                else {
+                        //getDC chroma and lum ptr insert here 
+                }
+                //getCBP ptr insert here
+            }
+            break;
+        case 1:
+        case 2:
+            h->rl_chroma_table_index = 2;
+            h->rl_table_index = 2;
+
+            h->dc_table_index = 0; //not used
+            break;
+        case 3:
+            h->rl_chroma_table_index = decode012(bs);
+            h->rl_table_index = decode012(bs);
+
+            h->dc_table_index = get_bits(bs,1);
+            break;
+        case 4:
+            //ff_msmpeg4_decode_ext_header(s, (2+5+5+17+7)/8);
+
+            if(h->bit_rate > MBAC_BITRATE) h->per_mb_rl_table= get_bits(bs,1);
+            else                           h->per_mb_rl_table= 0;
+
+            if(!h->per_mb_rl_table){
+                h->rl_chroma_table_index = decode012(bs);
+                h->rl_table_index = decode012(bs);
+            }
+
+            h->dc_table_index = get_bits(bs,1);
+            h->inter_intra_pred= 0;
+            break;
+        }
+        h->no_rounding = 1;
+    } else {
+        switch(h->msmpeg4_version){
+        case 0:
+            {
+                h->use_skip_mb_code = get_bits(bs, 1);
+                int code = show_bits(bs, 2);
+                switch(code) {
+                case 0:
+                case 1:
+                    flush_bits(bs, 1);
+                    h->rl_table_index = 0;
+                    h->rl_chroma_table_index = 0;
+                    //vld_intra chroma functions insert here
+                    //and inter function
+                    break;
+                case 2:
+                    h->rl_table_index = 1;
+                    h->rl_chroma_table_index = 1;
+                    //vld_intra chroma functions insert here
+                    flush_bits(bs, 2);
+                    break;
+                case 3:
+                    h->rl_table_index = 2;
+                    h->rl_chroma_table_index = 2;
+                    //vld_intra chroma functions insert here
+                    flush_bits(bs, 2);
+                    break;
+                default:
+                    break;
+                }
+                int dc_table_index = get_bits(bs, 1);
+                if(dc_table_index == 0) {
+                    //insert getDC function pointers
+                    h->dc_table_index = dc_table_index;
+                }
+                else {
+                    //insert getDC function pointers
+                    h->dc_table_index = 1;
+                }
+                int mv_table_index = get_bits(bs, 1);
+                if(mv_table_index == 0) {
+                    //insert getMVdata function pointers, getvophdr_311
+                    h->mv_table_index = mv_table_index;
+                }
+                else {
+                    //insert getMVdata function pointers, getvophdr_311
+                    h->mv_table_index = 1;
+                }
+                //insert getCBP function pointer here
+            }
+            break;
+        case 1:
+        case 2:
+            if(h->msmpeg4_version==1)
+                h->use_skip_mb_code = 1;
+            else
+                h->use_skip_mb_code = get_bits(bs, 1);
+            h->rl_table_index = 2;
+            h->rl_chroma_table_index = h->rl_table_index;
+            h->dc_table_index = 0; //not used
+            h->mv_table_index = 0;
+            break;
+        case 3:
+            h->use_skip_mb_code = get_bits(bs, 1);
+            h->rl_table_index = decode012(bs);
+            h->rl_chroma_table_index = h->rl_table_index;
+
+            h->dc_table_index = get_bits(bs, 1);
+
+            h->mv_table_index = get_bits(bs, 1);
+            break;
+        case 4:
+            h->use_skip_mb_code = get_bits(bs, 1);
+
+            if(h->bit_rate > MBAC_BITRATE) h->per_mb_rl_table= get_bits(bs, 1);
+            else                           h->per_mb_rl_table= 0;
+
+            if(!h->per_mb_rl_table){
+                h->rl_table_index = decode012(bs);
+                h->rl_chroma_table_index = h->rl_table_index;
+            }
+
+            h->dc_table_index = get_bits(bs, 1);
+
+            h->mv_table_index = get_bits(bs, 1);
+            //h->inter_intra_pred= (h->width*h->height < 320*240 && h->bit_rate<=II_BITRATE);
+            break;
+        }
+
+	//if(h->vop_coding_type != VOP_I)
+	{
+           if(h->flipflop_rounding){
+              h->no_rounding ^= 1;
+           }else{
+              h->no_rounding = 0;
+           }
+	}
+    }
+
+    return 1;
+}
+
+static unsigned long num_pics=0;
+static unsigned long num_longs=0;
+int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
+			const int len, video_surface_ctx_t *output,
+			uint32_t * bitstream_pos_returned)
+{
+    VdpPictureInfoMPEG4Part2 const *info = (VdpPictureInfoMPEG4Part2 const *)_info;
+    mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
+    vop_header_t *h = &decoder_p->vop_header;
+
+    uint32_t    startcode;
+    int        more_mbs = 1;
+    uint32_t   mp4mbaAddr_reg = 0;
+    int error=0;
+
+    int i;
+    void *ve_regs = ve_get_regs();
+    bitstream bs = { .data = decoder->data, .length = len, .bitpos = 0 };
+
+        
+    if (!decode_vop_header(&bs, info, decoder_p))
+            return 0;
+
+    if(decoder_p->vop_header.vop_coding_type == VOP_I) {
+            //check change in picture height/width
+    }
+    // activate MPEG engine
+    writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
+            
+    #if 0
+            // set quantisation tables
+            for (i = 0; i < 64; i++)
+                    writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+            for (i = 0; i < 64; i++)
+                    writel((uint32_t)(i) << 8 | info->non_intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+    #endif
+
+    // set forward/backward predicion buffers
+    if (info->forward_reference != VDP_INVALID_HANDLE)
+    {
+            video_surface_ctx_t *forward = handle_get(info->forward_reference);
+            writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
+            writel(ve_virt2phys(forward->data + forward->plane_size), ve_regs + VE_MPEG_FWD_CHROMA);
+    }
+    if (info->backward_reference != VDP_INVALID_HANDLE)
+    {
+            video_surface_ctx_t *backward = handle_get(info->backward_reference);
+            writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
+            writel(ve_virt2phys(backward->data + backward->plane_size), ve_regs + VE_MPEG_BACK_CHROMA);
+    }
+    else
+    {
+            writel(0x0, ve_regs + VE_MPEG_BACK_LUMA);
+            writel(0x0, ve_regs + VE_MPEG_BACK_CHROMA);
+    }
+
+    // set trb/trd
+    if (decoder_p->vop_header.vop_coding_type == VOP_B)
+    {
+            writel((info->trb[0] << 16) | (info->trd[0] << 0), ve_regs + VE_MPEG_TRBTRD_FRAME);
+            // unverified:
+            writel((info->trb[1] << 16) | (info->trd[1] << 0), ve_regs + VE_MPEG_TRBTRD_FIELD);
+    }
+    // set size
+    uint16_t width  = (decoder_p->mpeg4VolHdr.video_object_layer_width + 15) / 16;
+    uint16_t height = (decoder_p->mpeg4VolHdr.video_object_layer_height + 15) / 16;
+    if(width == 0 || height == 0) {
+            //some videos do not have a VOL, at least at the right time
+            //try with the following parameters
+            width = ((decoder->width + 15) / 16);
+            height = ((decoder->height + 15) / 16);
+    }
+
+    writel(((width+1) <<16) | (width << 8) | height, ve_regs + VE_MPEG_SIZE);
+    writel(((width * 16) << 16) | (height * 16), ve_regs + VE_MPEG_FRAME_SIZE);
+
+    // set buffers
+    writel(ve_virt2phys(decoder_p->mbh_buffer), ve_regs + VE_MPEG_MBH_ADDR);
+    writel(ve_virt2phys(decoder_p->dcac_buffer), ve_regs + VE_MPEG_DCAC_ADDR);
+    writel(ve_virt2phys(decoder_p->ncf_buffer), ve_regs + VE_MPEG_NCF_ADDR);
+
+    // set output buffers (Luma / Croma)
+    writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_REC_LUMA);
+    writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_REC_CHROMA);
+    writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_ROT_LUMA);
+    writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_ROT_CHROMA);
+
+    uint32_t rotscale = 0;
+    //bit 0-3: rotate_angle
+    //bit 4-5: horiz_scale_ratio
+    //bit 6-7: vert_scale_ratio
+    //bit 8-11: scale_down_enable
+    //bit 12-14: ?
+    //bit 16-19: ?
+    //bit 20-24: value 6
+    //bit 30: 1 
+    //bit 31: 0
+    const int no_scale = 2;
+    const int no_rotate = 6;
+    rotscale |= 0x40620000;
+    writel(rotscale, ve_regs + VE_MPEG_SDROT_CTRL);
+
+                            // ??
+    uint32_t ve_control = 0;
+    ve_control |= 0x80000000;
+    //should be changed to real variable, must be 1 if divx 311
+    ve_control |= (1 << 26);
+    //ve_control |= (1 << 21); set if width > 2048
+    ve_control |= (1 << 19);
+    //if not divx then 1, else 2 (but divx version dependent)
+    //ve_control |= 0x2 << 16; if divx, else 1 << 16
+    ve_control |= (1 << 14);
+    // if p-frame and some other conditions
+    //if(p-frame && 
+    ve_control |= (decoder_p->vop_header.vop_coding_type == VOP_P ? 0x1 : 0x0) << 12;
+    ve_control |= (1 << 8);
+    ve_control |= (1 << 7);
+    ve_control |= (1 << 4);
+    ve_control |= (1 << 3);
+    //ve_control = 0x80084198;
+    writel(ve_control, ve_regs + VE_MPEG_CTRL);
+    mp4mbaAddr_reg = 0;
+    writel(mp4mbaAddr_reg, ve_regs + VE_MPEG_MBA);
+
+    decoder_p->pkt_hdr.mb_xpos = 0;
+    decoder_p->pkt_hdr.mb_ypos = 0;
+    uint32_t mba_reg = 0x0;
+
+    uint32_t vop_hdr = 0;
+    vop_hdr |= (info->interlaced & 0x1) << 30;
+    vop_hdr |= (decoder_p->vop_header.vop_coding_type == VOP_B ? h->cbp : 0) << 28;
+    //needs correct variable !!!!!
+    vop_hdr |= (1 << 27); //divx bit?
+            //vop_hdr |= (h->vop_quant & 0x3) << 25;
+    vop_hdr |= (info->quant_type & 0x1 ) << 24;
+    vop_hdr |= (info->quarter_sample & 0x1) << 23;
+    //vop_hdr |= (info->resync_marker_disable & 0x1) << 22; //error_res_disable
+    vop_hdr |= (decoder_p->vop_header.vop_coding_type & 0x3) << 18;
+    vop_hdr |= (decoder_p->vop_header.no_rounding &0x1) << 17;
+            vop_hdr |= (h->inter_intra_pred & 0x1) << 15;
+    vop_hdr |= (decoder_p->vop_header.intra_dc_vlc_thr & 0x7) << 8;
+    vop_hdr |= (info->top_field_first& 0x1) << 7;
+    vop_hdr	|= (info->alternate_vertical_scan_flag & 0x1) << 6;
+    vop_hdr	|= (decoder_p->vop_header.vop_coding_type != VOP_I ? 
+                    info->vop_fcode_forward & 0x7 : 0) << 3;
+    vop_hdr	|= (decoder_p->vop_header.vop_coding_type == VOP_B ? 
+                    info->vop_fcode_backward & 0x7 : 0) << 0;
+
+    writel(vop_hdr, ve_regs + VE_MPEG_VOP_HDR);
+    
+    writel(decoder_p->vop_header.vop_quant, ve_regs + VE_MPEG_QP_INPUT);
+    
+    //mba_reg = readl(ve_regs + VE_MPEG_MBA);
+    //if(!info->resync_marker_disable)
+    //    mba_reg &= 0xff;    
+    //writel( readl(ve_regs + VE_MPEG_MBA) /* & 0xff */, ve_regs + VE_MPEG_MBA);
+    writel(mba_reg, ve_regs + VE_MPEG_MBA);
+    
+    //clean up everything
+    writel(0xffffffff, ve_regs + VE_MPEG_STATUS);
+    // set input offset in bits
+    writel(bs.bitpos, ve_regs + VE_MPEG_VLD_OFFSET);
+
+    // set input length in bits
+    writel(((len*8)+0x1F) & ~0x1F, ve_regs + VE_MPEG_VLD_LEN);
+
+    // input end
+    uint32_t input_addr = ve_virt2phys(decoder->data);
+    writel(input_addr + VBV_SIZE - 1, ve_regs + VE_MPEG_VLD_END);
+
+    // set input buffer
+    writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), ve_regs + VE_MPEG_VLD_ADDR);
+
+    uint32_t msmpeg_pic_hdr = 0;
+    int slice_height = decoder_p->vop_header.slice_height;
+    if(slice_height == 0)
+        slice_height = height;
+    msmpeg_pic_hdr |= (slice_height << 24);
+    msmpeg_pic_hdr |= (decoder_p->vop_header.per_mb_rl_table & 0x1) << 6;
+    msmpeg_pic_hdr |= (decoder_p->vop_header.rl_table_index & 0x3) << 8;
+    msmpeg_pic_hdr |= (decoder_p->vop_header.rl_chroma_table_index & 0x3) << 10;
+    msmpeg_pic_hdr |= (decoder_p->vop_header.mv_table_index & 0x3) << 14;
+    //msmpeg_pic_hdr |= (decoder_p->vop_header.mv_table_index & 0x3) << 12;
+    msmpeg_pic_hdr |= (decoder_p->vop_header.dc_table_index & 0x1) << 7;
+    //msmpeg_pic_hdr |= (decoder_p->vop_header.dc_table_index & 0x3) << 18;
+    //msmpeg_pic_hdr |= (decoder_p->vop_header.use_intra_dc_vlc & 0x1) << 20;
+    msmpeg_pic_hdr |= (decoder_p->vop_header.use_skip_mb_code & 0x1) << 20;
+    //msmpeg_pic_hdr |= (1 << 2); //is VC1 bit
+    
+    writel(msmpeg_pic_hdr, ve_regs + VE_MPEG_MSMPEG4_HDR);
+    
+    writel(0x0, ve_regs + VE_MPEG_CTR_MB);
+
+    // trigger
+    int vbv_size = width * height;
+    uint32_t mpeg_trigger = 0;
+    mpeg_trigger |= vbv_size << 8;
+    mpeg_trigger |= 0xd;
+    mpeg_trigger |= (1 << 31);
+    mpeg_trigger |= (0x4000000);
+    writel(mpeg_trigger, ve_regs + VE_MPEG_TRIGGER);
+
+        // wait for interrupt
+#ifdef TIMEMEAS
+    ++num_pics;
+    uint64_t tv, tv2;
+    tv = get_time();
+#endif
+    ve_wait(1);
+#ifdef TIMEMEAS                
+    tv2 = get_time();
+    if (tv2-tv > 10000000) {
+        printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+    }
+#endif
+    // clean interrupt flag
+    writel(0x0000c00f, ve_regs + VE_MPEG_STATUS);
+    error = readl(ve_regs + VE_MPEG_ERROR);
+    if(error)
+        printf("got error=%d while decoding frame\n", error);
+    writel(0x0, ve_regs + VE_MPEG_ERROR);
+
+    int veCurPos = readl(ve_regs + VE_MPEG_VLD_OFFSET);
+    int veCurPosAligned = (veCurPos+7) & ~ 0x7;
+    int byteCurPos = veCurPosAligned / 8;
+
+    if (decoder_p->vop_header.vop_coding_type == VOP_I && veCurPos+17 <= (len*8) )
+    {
+        bs.bitpos = veCurPos;
+        int fps = get_bits(&bs, 5);
+        decoder_p->vop_header.bit_rate = get_bits(&bs, 11);
+        decoder_p->vop_header.flipflop_rounding = get_bits(&bs, 1);
+    }
+    writel(readl(ve_regs + VE_MPEG_CTRL) | 0x7C, ve_regs + VE_MPEG_CTRL);            
+    // stop MPEG engine
+    writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x7, ve_regs + VE_CTRL);
+
+    if (error)
+	return VDP_STATUS_ERROR;
+    else
+        return VDP_STATUS_OK;
+}
+
+VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder)
+{
+    mp4_private_t *decoder_p = calloc(1, sizeof(mp4_private_t));
+    memset(decoder_p, 0, sizeof(*decoder_p));
+    if (!decoder_p)
+       goto err_priv;
+
+    int width = ((decoder->width + 15) / 16);
+    int height = ((decoder->height + 15) / 16);
+
+    decoder_p->mbh_buffer = ve_malloc(height * 2048);
+    if (!decoder_p->mbh_buffer)
+       goto err_mbh;
+
+    decoder_p->dcac_buffer = ve_malloc(width * height * 2);
+    if (!decoder_p->dcac_buffer)
+       goto err_dcac;
+
+    decoder_p->ncf_buffer = ve_malloc(4 * 1024);
+    if (!decoder_p->ncf_buffer)
+       goto err_ncf;
+
+    decoder_p->vop_header.flipflop_rounding = 1;
+    
+    decoder->decode = msmpeg4_decode;
+    decoder->private = decoder_p;
+    decoder->private_free = msmpeg4_private_free;
+    //decoder->setVideoControlData = msmpeg4_setVideoControlData;
+
+    save_tables(&decoder_p->tables);
+    
+    return VDP_STATUS_OK;
+
+err_ncf:
+    ve_free(decoder_p->dcac_buffer);
+err_dcac:
+    ve_free(decoder_p->mbh_buffer);
+err_mbh:
+    free(decoder_p);
+err_priv:
+    return VDP_STATUS_RESOURCES;
+}
+

@@ -97,6 +97,19 @@ typedef struct
 	int dquant;
 	int cbp;
 
+    int slice_height;
+    int no_rounding;
+    int flipflop_rounding;
+    int use_skip_mb_code;
+    int rl_table_index;
+    int rl_chroma_table_index;
+    int dc_table_index;
+    int mv_table_index;
+    int per_mb_rl_table;
+    int per_mb_rl_bit;
+    int msmpeg4_version;
+    int bit_rate;
+    int inter_intra_pred;
 } vop_header_t;
 
 typedef struct

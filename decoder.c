@@ -36,6 +36,7 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
 	if (!dec)
 		goto err_ctx;
 
+    memset(dec, 0, sizeof(*dec));
 	dec->device = dev;
 	dec->profile = profile;
 	dec->width = width;
@@ -44,6 +45,7 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
 	dec->data = ve_malloc(VBV_SIZE);
 	if (!(dec->data))
 		goto err_data;
+	dec->data_pos = 0;
 
 	VdpStatus ret;
 	switch (profile)
@@ -60,15 +62,21 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
 		ret = new_decoder_h264(dec);
 		break;
 
-    	case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
+    case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
 	case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:
-    	case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
-    	case VDP_DECODER_PROFILE_DIVX4_MOBILE:
-    	case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
-    	case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
-        	ret = new_decoder_mpeg4(dec);
-		break;
-
+    case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
+    case VDP_DECODER_PROFILE_DIVX4_MOBILE:
+    case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
+    case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
+    case VDP_DECODER_PROFILE_DIVX5_QMOBILE:
+    case VDP_DECODER_PROFILE_DIVX5_MOBILE:
+    case VDP_DECODER_PROFILE_DIVX5_HOME_THEATER:
+    case VDP_DECODER_PROFILE_DIVX5_HD_1080P:
+        ret = new_decoder_mpeg4(dec);
+        break;
+    case VDP_DECODER_PROFILE_DIVX3_HD_1080P:
+        ret = new_decoder_msmpeg4(dec);
+        break;
 	default:
 		ret = VDP_STATUS_INVALID_DECODER_PROFILE;
 		break;
@@ -148,6 +156,7 @@ VdpStatus vdp_decoder_render(VdpDecoder decoder, VdpVideoSurface target, VdpPict
 		memcpy(dec->data + pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
 		pos += bitstream_buffers[i].bitstream_bytes;
 	}
+	//memory is mapped unchached, therefore no flush necessary. hopefully ;)
 	ve_flush_cache(dec->data, pos);
 
 	return dec->decode(dec, picture_info, pos, vid);
@@ -176,12 +185,13 @@ VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile pro
 	case VDP_DECODER_PROFILE_H264_BASELINE:
 	case VDP_DECODER_PROFILE_H264_MAIN:
 	case VDP_DECODER_PROFILE_H264_HIGH:
-    case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
-    case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:    
-    case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
-    case VDP_DECODER_PROFILE_DIVX4_MOBILE:
-    case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
-    case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
+	case VDP_DECODER_PROFILE_MPEG4_PART2_SP:
+	case VDP_DECODER_PROFILE_MPEG4_PART2_ASP:    
+	case VDP_DECODER_PROFILE_DIVX4_QMOBILE:
+	case VDP_DECODER_PROFILE_DIVX4_MOBILE:
+	case VDP_DECODER_PROFILE_DIVX4_HOME_THEATER:
+	case VDP_DECODER_PROFILE_DIVX4_HD_1080P:
+	case VDP_DECODER_PROFILE_DIVX3_HD_1080P:
 		*is_supported = VDP_TRUE;
 		break;
 
@@ -191,4 +201,51 @@ VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile pro
 	}
 
 	return VDP_STATUS_OK;
+}
+
+VdpStatus vdp_decoder_set_video_control_data(VdpDecoder decoder, VdpDecoderControlDataId id, VdpDecoderControlData *data)
+{
+	decoder_ctx_t *dec = handle_get(decoder);
+	if (!dec)
+		return VDP_STATUS_INVALID_HANDLE;
+    if (dec->setVideoControlData)
+        return dec->setVideoControlData(dec, id, data);
+}
+
+VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, VdpPictureInfo const *picture_info, uint32_t bitstream_buffer_count, VdpBitstreamBuffer const *bitstream_buffers, uint32_t* bitstream_pos_returned)
+{
+	decoder_ctx_t *dec = handle_get(decoder);
+	if (!dec)
+		return VDP_STATUS_INVALID_HANDLE;
+
+	video_surface_ctx_t *vid = handle_get(target);
+	if (!vid)
+		return VDP_STATUS_INVALID_HANDLE;
+
+	vid->source_format = INTERNAL_YCBCR_FORMAT;
+	unsigned int i, pos = dec->data_pos;
+
+	for (i = 0; i < bitstream_buffer_count; i++)
+	{
+		memcpy(dec->data + pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
+		pos += bitstream_buffers[i].bitstream_bytes;
+	}
+	//memory is mapped unchached, therefore no flush necessary. hopefully ;)
+	ve_flush_cache(dec->data, pos);
+
+	int error = dec->decode_stream(dec, picture_info, pos, vid, bitstream_pos_returned);
+	if(error)
+	{
+		dec->data_pos = (*bitstream_pos_returned + 7) >> 3;
+		if(dec->data_pos > pos)
+		{
+			dec->data_pos = pos;
+		}
+		memmove(dec->data, (char*)dec->data + dec->data_pos, pos - dec->data_pos);
+	}
+	else
+	{
+		dec->data_pos = 0;
+	}
+	return error;
 }

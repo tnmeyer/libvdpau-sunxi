@@ -24,7 +24,7 @@
 #define MAX_HANDLES 64
 #define VBV_SIZE (1 * 1024 * 1024)
 
-#include <stdlib.h>
+//#include <stdlib.h>
 #include <vdpau/vdpau.h>
 #include <X11/Xlib.h>
 
@@ -56,10 +56,13 @@ typedef struct decoder_ctx_struct
 	uint32_t width, height;
 	VdpDecoderProfile profile;
 	void *data;
+	unsigned int data_pos;
 	device_ctx_t *device;
 	VdpStatus (*decode)(struct decoder_ctx_struct *decoder, VdpPictureInfo const *info, const int len, video_surface_ctx_t *output);
 	void *private;
+	VdpStatus (*decode_stream)(struct decoder_ctx_struct *decoder, VdpPictureInfo const *info, const int len, video_surface_ctx_t *output, uint32_t *ret_len);
 	void (*private_free)(struct decoder_ctx_struct *decoder);
+    VdpStatus (*setVideoControlData)(struct decoder_ctx_struct *decoder, VdpDecoderControlDataId id, VdpDecoderControlData *data);
 } decoder_ctx_t;
 
 typedef struct
@@ -115,7 +118,8 @@ typedef struct
 
 VdpStatus new_decoder_mpeg12(decoder_ctx_t *decoder);
 VdpStatus new_decoder_h264(decoder_ctx_t *decoder);
-VdpStatus new_decoder_mp4(decoder_ctx_t *decoder);
+VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder);
+VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder);
 
 int handle_create(void *data);
 void *handle_get(int handle);
@@ -185,7 +189,9 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
 VdpStatus vdp_decoder_destroy(VdpDecoder decoder);
 VdpStatus vdp_decoder_get_parameters(VdpDecoder decoder, VdpDecoderProfile *profile, uint32_t *width, uint32_t *height);
 VdpStatus vdp_decoder_render(VdpDecoder decoder, VdpVideoSurface target, VdpPictureInfo const *picture_info, uint32_t bitstream_buffer_count, VdpBitstreamBuffer const *bitstream_buffers);
+VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, VdpPictureInfo const *picture_info, uint32_t bitstream_buffer_count, VdpBitstreamBuffer const *bitstream_buffers, uint32_t *bitpos_out);
 VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile profile, VdpBool *is_supported, uint32_t *max_level, uint32_t *max_macroblocks, uint32_t *max_width, uint32_t *max_height);
+VdpStatus vdp_decoder_set_video_control_data(VdpDecoder decoder, VdpDecoderControlDataId id, VdpDecoderControlData *data);
 
 VdpStatus vdp_bitmap_surface_create(VdpDevice device, VdpRGBAFormat rgba_format, uint32_t width, uint32_t height, VdpBool frequently_accessed, VdpBitmapSurface *surface);
 VdpStatus vdp_bitmap_surface_destroy(VdpBitmapSurface surface);

@@ -15,5 +15,6 @@ int  bytealigned(bitstream *bs, int nbit);
 void flush_bits(bitstream *bs, int nbit);
 int nextbits_bytealigned(bitstream *bs, int nbit);
 int bits_left(bitstream *bs);
+int decode012(bitstream *bs);
 
 #endif
