@@ -147,6 +147,28 @@ typedef struct
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof((a)) / sizeof((a)[0]))
 #endif
+#define max(a, b) \
+    ({ __typeof__ (a) _a = (a); \
+      __typeof__ (b) _b = (b); \
+      _a > _b ? _a : _b; })
+
+#define min(a, b) \
+    ({ __typeof__ (a) _a = (a); \
+      __typeof__ (b) _b = (b); \
+      _a < _b ? _a : _b; })
+
+#define min_nz(a, b) \
+    ({ __typeof__ (a) _a = (a); \
+      __typeof__ (b) _b = (b); \
+      _a < _b ? (_a == 0 ? _b : _a) : (_b == 0 ? _a : _b); })
+
+#define clamp(val, lo, hi) min((typeof(val))max(val, lo), hi)
+
+#define ceil_log2(n) ((n) <= 1 ? 0 : 32 - __builtin_clz((n) - 1))
+
+#define ALIGN(x, a) (((x) + ((typeof(x))(a) - 1)) & ~((typeof(x))(a) - 1))
+
+#define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
 
 #ifdef DEBUG
 #include <stdio.h>
