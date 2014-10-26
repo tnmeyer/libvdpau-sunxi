@@ -27,6 +27,21 @@
 #include "stdlib.h"
 #include "mp4_vars.h"
 
+const uint16_t ff_sprite_trajectory_tab[15][2] = {
+ {0x00, 2}, {0x02, 3},  {0x03, 3},  {0x04, 3}, {0x05, 3}, {0x06, 3},
+ {0x0E, 4}, {0x1E, 5},  {0x3E, 6},  {0x7E, 7}, {0xFE, 8},
+ {0x1FE, 9},{0x3FE, 10},{0x7FE, 11},{0xFFE, 12},
+};
+#define SPRITE_TRAJ_VLC_BITS 6
+typedef struct VLC {
+    int bits;
+    int16_t (*table)[2]; ///< code, bits
+    int table_size, table_allocated;
+    void * volatile init_state;
+} VLC;
+
+static VLC sprite_trajectory;
+
 static int find_startcode(bitstream *bs)
 {
 	unsigned int pos, zeros = 0;
@@ -154,6 +169,356 @@ int decode012(bitstream *bs)
         return get_bits(bs, 1) + 1;
 }
 
+inline int GET_VLC( bitstream *gb, int16_t (*table)[2], int bits, int max_depth)
+{
+    int n, nb_bits;
+    unsigned int index;
+    int code;
+
+    index = show_bits(gb, bits);
+    code  = table[index][0];
+    n     = table[index][1];
+
+    if (max_depth > 1 && n < 0) {
+        flush_bits(gb, bits);
+
+        nb_bits = -n;
+
+        index = show_bits(gb, nb_bits) + code;
+        code  = table[index][0];
+        n     = table[index][1];
+        if (max_depth > 2 && n < 0) {
+            flush_bits(gb, nb_bits);
+
+            nb_bits = -n;
+            index = show_bits(gb, nb_bits) + code;   
+            code  = table[index][0];
+            n     = table[index][1];
+        }
+    }
+    flush_bits(gb, n);
+    return code;
+}
+
+static inline int get_vlc2(bitstream *s, int16_t (*table)[2],
+                                     int bits, int max_depth)
+{
+    int code;
+
+    code = GET_VLC( s, table, bits, max_depth);
+
+    return code;
+}
+
+#ifndef NEG_USR32
+inline int NEG_USR32(a,s)
+{ 
+    return (((uint32_t)(a))>>(32-(s)));
+}
+#endif
+
+static inline int get_xbits(bitstream *s, int n)
+{
+    register int sign;
+    register int32_t cache;
+    cache = get_bits(s, n) << (32-n);
+    sign  = ~cache >> 31;
+    int temp1 = sign ^ cache;
+    int temp2 = NEG_USR32(temp1, n);
+    int temp3 = ( temp2 ^ sign); 
+    return temp3 - sign;
+}
+
+#define init_vlc(vlc, nb_bits, nb_codes,                \
+                 bits, bits_wrap, bits_size,            \
+                 codes, codes_wrap, codes_size,         \
+                 flags)                                 \
+    ff_init_vlc_sparse(vlc, nb_bits, nb_codes,          \
+                       bits, bits_wrap, bits_size,      \
+                       codes, codes_wrap, codes_size,   \
+                       NULL, 0, 0, flags)
+
+static int ff_init_vlc_sparse(VLC *vlc, int nb_bits, int nb_codes,
+                       const void *bits, int bits_wrap, int bits_size,
+                       const void *codes, int codes_wrap, int codes_size,
+                       const void *symbols, int symbols_wrap, int symbols_size,
+                       int flags);
+void ff_free_vlc(VLC *vlc);
+
+void *avpriv_atomic_ptr_cas(void * volatile *ptr, void *oldval, void *newval)
+{
+    if (*ptr == oldval) {
+        *ptr = newval;
+        return oldval;
+    }
+    return *ptr;
+}
+
+#define INIT_VLC_LE             2
+#define INIT_VLC_USE_NEW_STATIC 4
+
+#define INIT_VLC_STATIC(vlc, bits, a, b, c, d, e, f, g, static_size)       \
+    do {                                                                   \
+        static int16_t table[static_size][2];                             \
+        (vlc)->table           = table;                                    \
+        (vlc)->table_allocated = static_size;                              \
+        init_vlc(vlc, bits, a, b, c, d, e, f, g, INIT_VLC_USE_NEW_STATIC); \
+    } while (0)
+
+typedef struct {
+    uint8_t bits;
+    uint16_t symbol;
+    /** codeword, with the first bit-to-be-read in the msb
+     * (even if intended for a little-endian bitstream reader) */
+    uint32_t code;
+} VLCcode;
+
+const uint8_t ff_reverse[256] = {
+0x00,0x80,0x40,0xC0,0x20,0xA0,0x60,0xE0,0x10,0x90,0x50,0xD0,0x30,0xB0,0x70,0xF0,
+0x08,0x88,0x48,0xC8,0x28,0xA8,0x68,0xE8,0x18,0x98,0x58,0xD8,0x38,0xB8,0x78,0xF8,
+0x04,0x84,0x44,0xC4,0x24,0xA4,0x64,0xE4,0x14,0x94,0x54,0xD4,0x34,0xB4,0x74,0xF4,
+0x0C,0x8C,0x4C,0xCC,0x2C,0xAC,0x6C,0xEC,0x1C,0x9C,0x5C,0xDC,0x3C,0xBC,0x7C,0xFC,
+0x02,0x82,0x42,0xC2,0x22,0xA2,0x62,0xE2,0x12,0x92,0x52,0xD2,0x32,0xB2,0x72,0xF2,
+0x0A,0x8A,0x4A,0xCA,0x2A,0xAA,0x6A,0xEA,0x1A,0x9A,0x5A,0xDA,0x3A,0xBA,0x7A,0xFA,
+0x06,0x86,0x46,0xC6,0x26,0xA6,0x66,0xE6,0x16,0x96,0x56,0xD6,0x36,0xB6,0x76,0xF6,
+0x0E,0x8E,0x4E,0xCE,0x2E,0xAE,0x6E,0xEE,0x1E,0x9E,0x5E,0xDE,0x3E,0xBE,0x7E,0xFE,
+0x01,0x81,0x41,0xC1,0x21,0xA1,0x61,0xE1,0x11,0x91,0x51,0xD1,0x31,0xB1,0x71,0xF1,
+0x09,0x89,0x49,0xC9,0x29,0xA9,0x69,0xE9,0x19,0x99,0x59,0xD9,0x39,0xB9,0x79,0xF9,
+0x05,0x85,0x45,0xC5,0x25,0xA5,0x65,0xE5,0x15,0x95,0x55,0xD5,0x35,0xB5,0x75,0xF5,
+0x0D,0x8D,0x4D,0xCD,0x2D,0xAD,0x6D,0xED,0x1D,0x9D,0x5D,0xDD,0x3D,0xBD,0x7D,0xFD,
+0x03,0x83,0x43,0xC3,0x23,0xA3,0x63,0xE3,0x13,0x93,0x53,0xD3,0x33,0xB3,0x73,0xF3,
+0x0B,0x8B,0x4B,0xCB,0x2B,0xAB,0x6B,0xEB,0x1B,0x9B,0x5B,0xDB,0x3B,0xBB,0x7B,0xFB,
+0x07,0x87,0x47,0xC7,0x27,0xA7,0x67,0xE7,0x17,0x97,0x57,0xD7,0x37,0xB7,0x77,0xF7,
+0x0F,0x8F,0x4F,0xCF,0x2F,0xAF,0x6F,0xEF,0x1F,0x9F,0x5F,0xDF,0x3F,0xBF,0x7F,0xFF,
+};
+
+static int alloc_table(VLC *vlc, int size, int use_static)
+{
+    int index = vlc->table_size;
+
+    vlc->table_size += size;
+    if (vlc->table_size > vlc->table_allocated) {
+        if (use_static)
+            abort(); // cannot do anything, init_vlc() is used with too little memory
+        vlc->table_allocated += (1 << vlc->bits);
+        vlc->table = realloc(vlc->table, vlc->table_allocated * sizeof(int16_t) * 2);
+        if (!vlc->table)
+            return 12;
+    }
+    return index;
+}
+
+
+static uint32_t bitswap_32(uint32_t x)
+{
+    return (uint32_t)ff_reverse[ x        & 0xFF] << 24 |
+           (uint32_t)ff_reverse[(x >> 8)  & 0xFF] << 16 |
+           (uint32_t)ff_reverse[(x >> 16) & 0xFF] << 8  |
+           (uint32_t)ff_reverse[ x >> 24];
+}
+
+static int compare_vlcspec(const void *a, const void *b)
+{
+    const VLCcode *sa = a, *sb = b;
+    return (sa->code >> 1) - (sb->code >> 1);
+}
+/**
+ * Build VLC decoding tables suitable for use with get_vlc().
+ *
+ * @param vlc            the context to be initted
+ *
+ * @param table_nb_bits  max length of vlc codes to store directly in this table
+ *                       (Longer codes are delegated to subtables.)
+ *
+ * @param nb_codes       number of elements in codes[]
+ *
+ * @param codes          descriptions of the vlc codes
+ *                       These must be ordered such that codes going into the same subtable are contiguous.
+ *                       Sorting by VLCcode.code is sufficient, though not necessary.
+ */
+static int build_table(VLC *vlc, int table_nb_bits, int nb_codes,
+                       VLCcode *codes, int flags)
+{
+    int table_size, table_index, index, code_prefix, symbol, subtable_bits;
+    int i, j, k, n, nb, inc;
+    uint32_t code;
+    int16_t (*table)[2];
+
+    table_size = 1 << table_nb_bits;
+    if (table_nb_bits > 30)
+       return -1;
+    table_index = alloc_table(vlc, table_size, flags & INIT_VLC_USE_NEW_STATIC);
+    //av_dlog(NULL, "new table index=%d size=%d\n", table_index, table_size);
+    if (table_index < 0)
+        return table_index;
+    table = &vlc->table[table_index];
+
+    for (i = 0; i < table_size; i++) {
+        table[i][1] = 0; //bits
+        table[i][0] = -1; //codes
+    }
+
+    /* first pass: map codes and compute auxiliary table sizes */
+    for (i = 0; i < nb_codes; i++) {
+        n      = codes[i].bits;
+        code   = codes[i].code;
+        symbol = codes[i].symbol;
+        //av_dlog(NULL, "i=%d n=%d code=0x%x\n", i, n, code);
+        if (n <= table_nb_bits) {
+            /* no need to add another table */
+            j = code >> (32 - table_nb_bits);
+            nb = 1 << (table_nb_bits - n);
+            inc = 1;
+            if (flags & INIT_VLC_LE) {
+                j = bitswap_32(code);
+                inc = 1 << n;
+            }
+            for (k = 0; k < nb; k++) {
+                //av_dlog(NULL, "%4x: code=%d n=%d\n", j, i, n);
+                if (table[j][1] /*bits*/ != 0) {
+                    //av_log(NULL, AV_LOG_ERROR, "incorrect codes\n");
+                    return 11;
+                }
+                table[j][1] = n; //bits
+                table[j][0] = symbol;
+                j += inc;
+            }
+        } else {
+            /* fill auxiliary table recursively */
+            n -= table_nb_bits;
+            code_prefix = code >> (32 - table_nb_bits);
+            subtable_bits = n;
+            codes[i].bits = n;
+            codes[i].code = code << table_nb_bits;
+            for (k = i+1; k < nb_codes; k++) {
+                n = codes[k].bits - table_nb_bits;
+                if (n <= 0)
+                    break;
+                code = codes[k].code;
+                if (code >> (32 - table_nb_bits) != code_prefix)
+                    break;
+                codes[k].bits = n;
+                codes[k].code = code << table_nb_bits;
+                subtable_bits = subtable_bits > n ? subtable_bits : n;
+            }
+            subtable_bits = subtable_bits < table_nb_bits ? subtable_bits : table_nb_bits;
+            j = (flags & INIT_VLC_LE) ? bitswap_32(code_prefix) >> (32 - table_nb_bits) : code_prefix;
+            table[j][1] = -subtable_bits;
+            //av_dlog(NULL, "%4x: n=%d (subtable)\n",
+            //        j, codes[i].bits + table_nb_bits);
+            index = build_table(vlc, subtable_bits, k-i, codes+i, flags);
+            if (index < 0)
+                return index;
+            /* note: realloc has been done, so reload tables */
+            table = &vlc->table[table_index];
+            table[j][0] = index; //code
+            i = k-1;
+        }
+    }
+    return table_index;
+}
+#define GET_DATA(v, table, i, wrap, size)                   \
+{                                                           \
+    const uint8_t *ptr = (const uint8_t *)table + i * wrap; \
+    switch(size) {                                          \
+    case 1:                                                 \
+        v = *(const uint8_t *)ptr;                          \
+        break;                                              \
+    case 2:                                                 \
+        v = *(const uint16_t *)ptr;                         \
+        break;                                              \
+    default:                                                \
+        v = *(const uint32_t *)ptr;                         \
+        break;                                              \
+    }                                                       \
+}
+
+
+static int ff_init_vlc_sparse(VLC *vlc, int nb_bits, int nb_codes,
+                       const void *bits, int bits_wrap, int bits_size,
+                       const void *codes, int codes_wrap, int codes_size,
+                       const void *symbols, int symbols_wrap, int symbols_size,
+                       int flags)
+{
+    VLCcode *buf;
+    int i, j, ret;
+    VLCcode localbuf[1500]; // the maximum currently needed is 1296 by rv34
+    void *state;
+
+    vlc->bits = nb_bits;
+    if (flags & INIT_VLC_USE_NEW_STATIC) {
+        while (state = avpriv_atomic_ptr_cas(&vlc->init_state, NULL, vlc)) {
+            if (state == vlc + 1) {
+                //av_assert0(vlc->table_size && vlc->table_size == vlc->table_allocated);
+                return 0;
+            }
+        }
+        //av_assert0(!vlc->table_size);
+        //av_assert0(nb_codes + 1 <= FF_ARRAY_ELEMS(localbuf));
+        buf = localbuf;
+    } else {
+        vlc->table           = NULL;
+        vlc->table_allocated = 0;
+        vlc->table_size      = 0;
+
+        buf = malloc((nb_codes + 1) * sizeof(VLCcode));
+        if (!buf)
+            return 10;
+    }
+
+
+    //av_assert0(symbols_size <= 2 || !symbols);
+    j = 0;
+#define COPY(condition)\
+    for (i = 0; i < nb_codes; i++) {                                        \
+        GET_DATA(buf[j].bits, bits, i, bits_wrap, bits_size);               \
+        if (!(condition))                                                   \
+            continue;                                                       \
+        if (buf[j].bits > 3*nb_bits || buf[j].bits>32) {                    \
+            if (!(flags & INIT_VLC_USE_NEW_STATIC))                         \
+                free(buf);                                               \
+            return -1;                                                      \
+        }                                                                   \
+        GET_DATA(buf[j].code, codes, i, codes_wrap, codes_size);            \
+        if (buf[j].code >= (1LL<<buf[j].bits)) {                            \
+            if (!(flags & INIT_VLC_USE_NEW_STATIC))                         \
+                free(buf);                                               \
+            return -1;                                                      \
+        }                                                                   \
+        if (flags & INIT_VLC_LE)                                            \
+            buf[j].code = bitswap_32(buf[j].code);                          \
+        else                                                                \
+            buf[j].code <<= 32 - buf[j].bits;                               \
+        if (symbols)                                                        \
+            GET_DATA(buf[j].symbol, symbols, i, symbols_wrap, symbols_size) \
+        else                                                                \
+            buf[j].symbol = i;                                              \
+        j++;                                                                \
+    }
+    COPY(buf[j].bits > nb_bits);
+    // qsort is the slowest part of init_vlc, and could probably be improved or avoided
+    qsort(buf, j, sizeof(VLCcode), compare_vlcspec);
+    COPY(buf[j].bits && buf[j].bits <= nb_bits);
+    nb_codes = j;
+
+    ret = build_table(vlc, nb_bits, nb_codes, buf, flags);
+
+    if (flags & INIT_VLC_USE_NEW_STATIC) {
+        //if(vlc->table_size != vlc->table_allocated)
+        //    av_log(NULL, AV_LOG_ERROR, "needed %d had %d\n", vlc->table_size, vlc->table_allocated);
+        state = avpriv_atomic_ptr_cas(&vlc->init_state, vlc, vlc+1);
+        //av_assert0(state == vlc);
+        //av_assert0(ret >= 0);
+    } else {
+        free(buf);
+        if (ret < 0) {
+            free(&vlc->table);
+            return ret;
+        }
+    }
+    return 0;
+}
+
 static void dumpData(char* data)
 {
     int pos=0;
@@ -163,31 +528,31 @@ static void dumpData(char* data)
 
 static int find_resynccode(bitstream *bs, int resync_length)
 {
-	unsigned int pos, zeros = 0;
+    unsigned int pos, zeros = 0;
     
     bytealign(bs);
     
-	for (pos = bs->bitpos / 8; pos < bs->length; pos++)
-	{
+    for (pos = bs->bitpos / 8; pos < bs->length; pos++)
+    {
         if(bs->data[pos])
             continue;
-
+    
         bs->bitpos = pos * 8;
         int resync_code = show_bits(bs, resync_length);
         if(resync_code == 1)
             return 1;
-	}
+    }
 
-	return 0;
+    return 0;
 }
 
 static void mp4_private_free(decoder_ctx_t *decoder)
 {
-	mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
-	ve_free(decoder_p->mbh_buffer);
-	ve_free(decoder_p->dcac_buffer);
-	ve_free(decoder_p->ncf_buffer);
-	free(decoder_p);
+    mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
+    ve_free(decoder_p->mbh_buffer);
+    ve_free(decoder_p->dcac_buffer);
+    ve_free(decoder_p->ncf_buffer);
+    free(decoder_p);
 }
 
 static VLCtabMb MCBPCtabIntra[] = {
@@ -347,24 +712,24 @@ static int getMCBPC(bitstream *bs, mp4_private_t *priv)
 static int getCBPY(bitstream *bs, mp4_private_t *priv)
 {
     vop_header_t *h = &priv->vop_header;
-	int cbpy;
-	int code = show_bits(bs, 6);
+    int cbpy;
+    int code = show_bits(bs, 6);
 
-	if (code < 2) {
-		return -1;
-	}
-			  
-	if (code >= 48) {
-		get_bits(bs,2);
-		cbpy = 15;
-	} else {
-		get_bits(bs, CBPYtab[code].len);
-		cbpy = CBPYtab[code].val;
-	}
+    if (code < 2) {
+        return -1;
+    }
+                        
+    if (code >= 48) {
+        get_bits(bs,2);
+        cbpy = 15;
+    } else {
+        get_bits(bs, CBPYtab[code].len);
+        cbpy = CBPYtab[code].val;
+    }
 
-	if (!((h->derived_mb_type == 3) ||
-		(h->derived_mb_type == 4)))
-		  cbpy = 15 - cbpy;
+    if (!((h->derived_mb_type == 3) ||
+        (h->derived_mb_type == 4)))
+            cbpy = 15 - cbpy;
 
   return cbpy;
 }
@@ -548,144 +913,612 @@ static int setMV(bitstream *bs, mp4_private_t *priv, int block_num)
 
 static int macroblock(bitstream *bs, mp4_private_t *priv)
 {
-	int j;
-	int intraFlag, interFlag;
+    int j;
+    int intraFlag, interFlag;
     vop_header_t *h = &priv->vop_header;
+    VdpDecoderMpeg4VolHeader *vol = &priv->mpeg4VolHdr;
     video_packet_header_t* vp = &priv->pkt_hdr;
 
 //	_Print("-Macroblock %d\n", mp4_state->hdr.mba);
 //	_Break(93, 426);
 
-	if (h->vop_coding_type != VOP_I)
-		h->not_coded = get_bits(bs, 1);
+    if(h->vop_coding_type != VOP_B) {
+        if(vol->video_object_layer_shape != BIN_ONLY_SHAPE) {
+            if (h->vop_coding_type != VOP_I)
+                    h->not_coded = get_bits(bs, 1);
+    
+            // coded macroblock or I-VOP
+            if (! h->not_coded || h->vop_coding_type == VOP_I) {
+    
+                    h->mcbpc = getMCBPC(bs, priv); // mcbpc
+                    h->derived_mb_type = h->mcbpc & 7;
+                    h->cbpc = (h->mcbpc >> 4) & 3;
+    
+    #if 0
+                    mp4_state->modemap[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = 
+                            mp4_state->hdr.derived_mb_type; // [Review] used only in P-VOPs
+    #endif
+                    intraFlag = ((h->derived_mb_type == INTRA) || 
+                            (h->derived_mb_type == INTRA_Q)) ? 1 : 0;
+                    interFlag = (! intraFlag);
+    
+                    if (intraFlag)
+                            h->ac_pred_flag = get_bits(bs, 1);
+                    if (h->derived_mb_type != STUFFING) {
+    
+                            h->cbpy = getCBPY(bs, priv); // cbpy
+                            h->cbp = (h->cbpy << 2) | h->cbpc;
+                    }
+                    else
+                            return 1;
+    
+    //		_Print("Mb type: %d\n", mp4_state->hdr.derived_mb_type);
+    //		_Print("Pattern Chr: %d\n", mp4_state->hdr.cbpc);
+    //		_Print("Pattern Luma: %d\n", mp4_state->hdr.cbpy);
+    
+                    if (h->derived_mb_type == INTER_Q ||
+                            h->derived_mb_type == INTRA_Q) {
+    
+                            h->dquant = get_bits(bs, 2);
+                            h->quantizer += DQtab[h->dquant];
+                            if (h->quantizer > 31) {
+                                    h->quantizer = 31;
+                                    //printf("limiting quantizer to 31\n");
+                            }
+                            else if (h->quantizer < 1) {
+                                    h->quantizer = 1;
+                                    //printf("limiting quantizer to 1\n");
+                            }
+                    }
+                    if (h->derived_mb_type == INTER ||
+                            h->derived_mb_type == INTER_Q) {
+    
+                            setMV(bs, priv, -1); // mv
+                    }
+                    else if (h->derived_mb_type == INTER4V) {
+    #if 1
+                            for (j = 0; j < 4; j++) {
+    
+                                    setMV(bs, priv, j); // mv
+                            }
+    #endif
+                    }
+                    else { // intra
+                            if (h->vop_coding_type == VOP_P) {
+                                    int i;
+    #if 1
+                                    for (i = 0; i < 4; i++) {
+                                            priv->MV[0][i][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
+                                            priv->MV[1][i][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
+                                    }
+    #endif
+                            }
+                    }
+    
+    #if 1
+                    // motion compensation
+                    if (interFlag) 
+                    {
+    
+    //			reconstruct(mp4_state->hdr.mb_xpos, mp4_state->hdr.mb_ypos, mp4_state->hdr.derived_mb_type);
+    
+                            // texture decoding add
+                            for (j = 0; j < 6; j++) {
+                                    int coded = h->cbp & (1 << (5 - j));
+    
+                                    if (coded) { 
+                                            blockInter(bs, priv, j, (coded != 0));
+                                            //addblockInter(j, vp->mb_xpos, vp->mb_ypos);
+                                    }
+                            }
+                    }
+                    else 
+                    {
+                            // texture decoding add
+                            for (j = 0; j < 6; j++) {
+                                    int coded = h->cbp & (1 << (5 - j));
+    
+                                    blockIntra(bs, priv, j, (coded != 0));
+                                    //addblockIntra(j, vp->mb_xpos, vp->mb_ypos);
+                            }
+                    }
+    #endif
+            }
+    
+            // not coded macroblock
+            else {
+                    priv->MV[0][0][vp->mb_ypos+1][vp->mb_xpos+1] = 
+            priv->MV[0][1][vp->mb_ypos+1][vp->mb_xpos+1] =
+                    priv->MV[0][2][vp->mb_ypos+1][vp->mb_xpos+1] = 
+            priv->MV[0][3][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
+                    priv->MV[1][0][vp->mb_ypos+1][vp->mb_xpos+1] = 
+            priv->MV[1][1][vp->mb_ypos+1][vp->mb_xpos+1] =
+                    priv->MV[1][2][vp->mb_ypos+1][vp->mb_xpos+1] = 
+            priv->MV[1][3][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
+    
+    #if 0
+                    //mp4_state->modemap[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = NOT_CODED; // [Review] used only in P-VOPs
+    
+                    //reconstruct(mp4_state->hdr.mb_xpos, mp4_state->hdr.mb_ypos, mp4_state->hdr.derived_mb_type);
+    #endif
+            }
+    
+            //mp4_state->quant_store[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = mp4_state->hdr.quantizer;
+    
+            if (priv->pkt_hdr.mb_xpos < (priv->pkt_hdr.mb_width-1)) {
+                    priv->pkt_hdr.mb_xpos++;
+            }
+            else {
+                    priv->pkt_hdr.mb_ypos++;
+                    priv->pkt_hdr.mb_xpos = 0;
+            }
+        }
+    }
+    return 1;
+}
 
-	// coded macroblock or I-VOP
-	if (! h->not_coded || h->vop_coding_type == VOP_I) {
+static inline long ROUNDED_DIV(a,b)
+{
+  return ((a)>0 ? (((a) + ((b)>>1))/(b)) : (((a) - ((b)>>1))/(b)));
+}
 
-		h->mcbpc = getMCBPC(bs, priv); // mcbpc
-		h->derived_mb_type = h->mcbpc & 7;
-		h->cbpc = (h->mcbpc >> 4) & 3;
+static inline long long SIGNED_ROUNDED_DIV(long long a, long b)
+{
+    return (((a) + (b>>1))/b);
+}
 
+#define LOG2CEIL(n) (n <= 1 ? 0 : 32 - __builtin_clz(n - 1))
+int read_dmv_length(bitstream *gb)
+{
+    int value = get_bits(gb, 2);
+    if(value == 2)
+    {
+        value = get_bits(gb, 1) + 3;
+    }
+    else if( value == 1)
+    {
+        value = get_bits(gb, 1) + 1;
+    }
+    else if( value == 3) 
+    {
+        int i = 0;
+        value = 5;
+        while (i < 15)
+        {
+            int value2 = get_bits(gb, 1);
+            if(value2 == 0)
+                break;
+            value++;
+        }
+        if(i == 15)
+            value = -1;
+    }
+    else
+    {
+        value = 0;
+    }
+    return value;
+}
+int read_dmv_code (bitstream *gb, int length)
+{
+    int new_length = length;
+    int code=length;
+
+    if(length)
+    {
+        int code = get_bits(gb, 1);
+        new_length--;
+        int mask = 1 << new_length;
+        if(code == 0)
+        {
+            mask = (1 << length) >> 1;
+        }
+        if(new_length > 1)
+        {
+            code = get_bits(gb, length-1) + mask;
+        }
+    }
+    return code;
+}
+
+static int mpeg4_decode_sprite_trajectory(bitstream *gb, mp4_private_t *priv)
+{
+    vop_header_t *vop = &priv->vop_header;
+    VdpDecoderMpeg4VolHeader *vol = &priv->mpeg4VolHdr;
+
+    int i;
+    int a= 2<<vol->sprite_warping_accuracy;
+    int rho= 3-vol->sprite_warping_accuracy;
+    int r=16/a;
+    const int vop_ref[4][2]= {  {0,0}, 
+                                {vol->video_object_layer_width,0}, 
+                                {0, vol->video_object_layer_height}, 
+                                {vol->video_object_layer_width, vol->video_object_layer_height}}; // only true for rectangle shapes
+    int d[4][2]={{0,0}, {0,0}, {0,0}, {0,0}};
+    int sprite_ref[4][2];
+    int virtual_ref[2][2];
+    int w2, h2, w3, h3;
+    int alpha=0, beta=0;
+    int w= vol->video_object_layer_width;
+    int h= vol->video_object_layer_height;
+    int min_ab;
+    int temp, term1, term2,term3,term4;
+
+    if (w <= 0 || h <= 0)
+        return 1;
+
+    for(i=0; i<vol->no_of_sprite_warping_points; i++){
+        int length;
+        int x=0, y=0;
+
+        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
+//        length = read_dmv_length(gb);
+        if(length){
+            x= get_xbits(gb, length);
+//            x = read_dmv_code(gb, length);
+        }
+        //if(!(s->divx_version==500 && s->divx_build==413)) skip_bits(gb,1); /* marker bit */
+	if (get_bits(gb, 1) != 1)
+		VDPAU_DBG("vop header marker error");
+
+        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
+//            length= read_dmv_length(gb);
+        if(length){
+            y=get_xbits(gb, length);
+//            y=read_dmv_code(gb, length);
+        }
+	if (get_bits(gb, 1) != 1)
+		VDPAU_DBG("vop header marker error");
+        vop->sprite_traj[i][0]= d[i][0]= x;
+        vop->sprite_traj[i][1]= d[i][1]= y;
+    }
+    for(; i<4; i++)
+        vop->sprite_traj[i][0]= vop->sprite_traj[i][1]= 0;
+
+    while((1<<alpha)<w) alpha++;
+    while((1<<beta )<h) beta++; // there seems to be a typo in the mpeg4 std for the definition of w' and h'
+    w2= 1<<alpha;
+    h2= 1<<beta;
+
+// Note, the 4th point isn't used for GMC
 #if 0
-		mp4_state->modemap[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = 
-			mp4_state->hdr.derived_mb_type; // [Review] used only in P-VOPs
+    if(s->divx_version==500 && s->divx_build==413){
+        sprite_ref[0][0]= a*vop_ref[0][0] + d[0][0];
+        sprite_ref[0][1]= a*vop_ref[0][1] + d[0][1];
+        sprite_ref[1][0]= a*vop_ref[1][0] + d[0][0] + d[1][0];
+        sprite_ref[1][1]= a*vop_ref[1][1] + d[0][1] + d[1][1];
+        sprite_ref[2][0]= a*vop_ref[2][0] + d[0][0] + d[2][0];
+        sprite_ref[2][1]= a*vop_ref[2][1] + d[0][1] + d[2][1];
+    } else {
 #endif
-		intraFlag = ((h->derived_mb_type == INTRA) || 
-			(h->derived_mb_type == INTRA_Q)) ? 1 : 0;
-		interFlag = (! intraFlag);
+        int temp_i0 = (2*vop_ref[0][0] + d[0][0]);
+        sprite_ref[0][0]= (a>>1)*temp_i0;
+        int temp_j0 = (2*vop_ref[0][1] + d[0][1]);
+        sprite_ref[0][1]= (a>>1)*temp_j0;
+        int temp_i1 = (2*vop_ref[1][0] + d[0][0] + d[1][0]);
+        sprite_ref[1][0]= (a>>1)*temp_i1;
+        int temp_j1 = (2*vop_ref[1][1] + d[0][1] + d[1][1]);
+        sprite_ref[1][1]= (a>>1)*temp_j1;
+        int temp_i2 = (2*vop_ref[2][0] + d[0][0] + d[2][0]);
+        sprite_ref[2][0]= (a>>1)*temp_i2;
+        int temp_j2 = (2*vop_ref[2][1] + d[0][1] + d[2][1]);
+        sprite_ref[2][1]= (a>>1)*temp_j2;
+//    }
+    vop->sprite_ref[0][0] = sprite_ref[0][0];
+    vop->sprite_ref[0][1] = sprite_ref[0][1];
+    vop->sprite_ref[1][0] = sprite_ref[1][0];
+    vop->sprite_ref[1][1] = sprite_ref[1][1];
+    vop->sprite_ref[2][0] = sprite_ref[2][0];
+    vop->sprite_ref[2][1] = sprite_ref[2][1];
 
-		if (intraFlag)
-			h->ac_pred_flag = get_bits(bs, 1);
-		if (h->derived_mb_type != STUFFING) {
+/*    sprite_ref[3][0]= (a>>1)*(2*vop_ref[3][0] + d[0][0] + d[1][0] + d[2][0] + d[3][0]);
+    sprite_ref[3][1]= (a>>1)*(2*vop_ref[3][1] + d[0][1] + d[1][1] + d[2][1] + d[3][1]); */
 
-			h->cbpy = getCBPY(bs, priv); // cbpy
-			h->cbp = (h->cbpy << 2) | h->cbpc;
-		}
-		else
-			return 1;
+// this is mostly identical to the mpeg4 std (and is totally unreadable because of that ...)
+// perhaps it should be reordered to be more readable ...
+// the idea behind this virtual_ref mess is to be able to use shifts later per pixel instead of divides
+// so the distance between points is converted from w&h based to w2&h2 based which are of the 2^x form
 
-//		_Print("Mb type: %d\n", mp4_state->hdr.derived_mb_type);
-//		_Print("Pattern Chr: %d\n", mp4_state->hdr.cbpc);
-//		_Print("Pattern Luma: %d\n", mp4_state->hdr.cbpy);
+    long temp_v1_1 = 16*(vop_ref[0][0] + w2);
+    long temp_v1_2_1 = (w - w2);
+    long temp_v1_2_2 = (r*sprite_ref[0][0] - 16*vop_ref[0][0]);
+    long temp_v1_2 = temp_v1_2_1 * temp_v1_2_2;
+    long temp_v1_3_2 = 16 * -vop_ref[1][0];
+    long temp_v1_3_1 = (r*sprite_ref[1][0] + temp_v1_3_2);
+    long temp_v1_3 = w2 * temp_v1_3_1;
+    long temp_v1_4 = ( temp_v1_2 + temp_v1_3);
+    long temp_v1_5 = ROUNDED_DIV(temp_v1_4,w);
+    virtual_ref[0][0]= temp_v1_1 + temp_v1_5;
 
-		if (h->derived_mb_type == INTER_Q ||
-			h->derived_mb_type == INTRA_Q) {
+    long temp_v2_1 = 16*vop_ref[0][1];
+    long temp_v2_2_1 = (w - w2);
+    long temp_v2_2_2 = (r * sprite_ref[0][1] - 16*vop_ref[0][1]);
+    long temp_v2_2 = temp_v2_2_1 * temp_v2_2_2;
+    long temp_v2_3 = w2*(r*sprite_ref[1][1] - 16*vop_ref[1][1]);
+    long temp_v2_4 = (temp_v2_2 + temp_v2_3);
+    long temp_v2_5 = ROUNDED_DIV(temp_v2_4,w);
+    virtual_ref[0][1]= temp_v2_1 + temp_v2_5;
 
-			h->dquant = get_bits(bs, 2);
-			h->quantizer += DQtab[h->dquant];
-			if (h->quantizer > 31) {
-				h->quantizer = 31;
-				//printf("limiting quantizer to 31\n");
-			}
-			else if (h->quantizer < 1) {
-				h->quantizer = 1;
-				//printf("limiting quantizer to 1\n");
-			}
-		}
-		if (h->derived_mb_type == INTER ||
-			h->derived_mb_type == INTER_Q) {
+    long temp_v3_1 = 16*vop_ref[0][0];
+    long temp_v3_2_1 = (h - h2);
+    long temp_v3_2_2 = (r* sprite_ref[0][0] - 16*vop_ref[0][0]);
+    long temp_v3_2 = temp_v3_2_1 * temp_v3_2_2;
+    long temp_v3_3 = h2*(r* sprite_ref[2][0] - 16*vop_ref[2][0]);
+    long temp_v3_4 = ( temp_v3_2 + temp_v3_3);
+    long temp_v3_5 = ROUNDED_DIV(temp_v3_4,h);
+    virtual_ref[1][0]= temp_v3_1 + temp_v3_5;
 
-			setMV(bs, priv, -1); // mv
-		}
-		else if (h->derived_mb_type == INTER4V) {
+    long temp_v4_1 = 16*(vop_ref[0][1] + h2);
+    long temp_v4_2_1 = (h - h2);
+    long temp_v4_2_2 = (r * sprite_ref[0][1] - 16*vop_ref[0][1]);
+    long temp_v4_2 = temp_v4_2_1 * temp_v4_2_2;
+    long temp_v4_3 = h2*(r*sprite_ref[2][1] - 16*vop_ref[2][1]);
+    long temp_v4_4 = ( temp_v4_2 + temp_v4_3);
+    long temp_v4_5 = ROUNDED_DIV(temp_v4_4,h);
+    virtual_ref[1][1]= temp_v4_1 + temp_v4_5;
+
+    //warping
+    long w2_h2_r = w2*h2*r;
+    long temp_v1_6 = (-r)*sprite_ref[0][0] + virtual_ref[0][0];
+    long temp_v1_7 = (-r)*sprite_ref[0][0] + virtual_ref[1][0];
+    long virtual_ref_0_0_adv_1 = h2 * temp_v1_6;
+    long virtual_ref_0_0_adv_2 = w2 * temp_v1_7;
+    long virtual_ref_0_0_adv = virtual_ref_0_0_adv_1 + virtual_ref_0_0_adv_2;
+    vop->virtual_ref[0][0] = SIGNED_ROUNDED_DIV(virtual_ref_0_0_adv,w2_h2_r) + sprite_ref[0][0];
+
+    long temp_v2_6 = (-r)*sprite_ref[0][1] + virtual_ref[0][1];
+    long temp_v2_7 = (-r)*sprite_ref[0][1] + virtual_ref[1][1];
+    long virtual_ref_0_1_adv_1 = h2 * temp_v2_6;
+    long virtual_ref_0_1_adv_2 = w2 * temp_v2_7;
+    long virtual_ref_0_1_adv = virtual_ref_0_1_adv_1 + virtual_ref_0_1_adv_2;
+    vop->virtual_ref[0][1] = SIGNED_ROUNDED_DIV(virtual_ref_0_1_adv,w2_h2_r) + sprite_ref[0][1];
+
+    long temp_v3_6 = (-r)*sprite_ref[0][0] + virtual_ref[0][0];
+    long temp_v3_7 = (-r)*sprite_ref[0][0] + virtual_ref[1][0];
+    long virtual_ref_1_0_adv_1 = w2 * temp_v3_6;
+    long virtual_ref_1_0_adv_2 = h2 * temp_v3_7;
+    long virtual_ref_1_0_adv_3 = 2*w2_h2_r*sprite_ref[0][0];
+    long virtual_ref_1_0_adv_4 = 16*w2*h2;
+    long virtual_ref_1_0_adv = virtual_ref_1_0_adv_1 + virtual_ref_1_0_adv_2 + 
+                                    virtual_ref_1_0_adv_3 - virtual_ref_1_0_adv_4;
+    vop->virtual_ref[1][0] = SIGNED_ROUNDED_DIV(virtual_ref_1_0_adv,4*w2_h2_r);
+
+    long temp_v4_6 = (-r)*sprite_ref[0][1] + virtual_ref[0][1];
+    long temp_v4_7 = (-r)*sprite_ref[0][1] + virtual_ref[1][1];
+    long virtual_ref_1_1_adv_1 = w2 * temp_v4_6;
+    long virtual_ref_1_1_adv_2 = h2 * temp_v4_7;
+    long virtual_ref_1_1_adv_3 = 2*w2_h2_r*sprite_ref[0][1];
+    long virtual_ref_1_1_adv_4 = 16*w2*h2;
+    long virtual_ref_1_1_adv = virtual_ref_1_1_adv_1 + virtual_ref_1_1_adv_2 +
+                                    virtual_ref_1_1_adv_3 - virtual_ref_1_1_adv_4;
+    vop->virtual_ref[1][1] = SIGNED_ROUNDED_DIV(virtual_ref_1_1_adv,4*w2_h2_r);
+
+
+    int runs = LOG2CEIL(w2*h2*r);
+    unsigned int mask = 1 << runs;
+    long normalize_save = virtual_ref_0_0_adv_2 | virtual_ref_0_1_adv_1 | virtual_ref_0_0_adv_1 | virtual_ref_0_1_adv_2;
+    unsigned int normalize = normalize_save | mask;
+    long save_virtual_ref_0_0_adv_2 = virtual_ref_0_0_adv_2;
+    long save_virtual_ref_0_1_adv_1 = virtual_ref_0_1_adv_1;
+    long save_virtual_ref_0_0_adv_1 = virtual_ref_0_0_adv_1;
+    long save_virtual_ref_0_1_adv_2 = virtual_ref_0_1_adv_2;
+
+    while (/*(runs > 0) && */((normalize & 0x1) == 0 ))
+    {
+        virtual_ref_0_0_adv_2 >>= 1;
+        virtual_ref_0_1_adv_1 >>= 1;
+        virtual_ref_0_0_adv_1 >>= 1;
+        virtual_ref_0_1_adv_2 >>= 1;
+        mask >>= 1;
+        normalize = virtual_ref_0_0_adv_2 | virtual_ref_0_1_adv_1 | 
+                    virtual_ref_0_0_adv_1 | virtual_ref_0_1_adv_2 | mask;
+        runs -= 1;
+    }
+    int w2_4 = w2 * 4;
+    int w2_2 = w2 * 2;
+
+    int foo1 = r * h2 * w2_4;
+    int runs2 = LOG2CEIL(foo1);
+    int runs2_1 = runs2 - 1;
+    int mask2 = 1 << runs2_1;
+    unsigned long long l_mask2 = mask2;
+
+    int foo3 = h2 * temp_v1_1;
+    int foo4 = h2 * w2_2;
+
+    long long l_foo3 = foo3;
+    long long l_foo4 = foo4;
+
+    long long l_normalize_save = normalize_save;
+    unsigned long long l_mask = l_normalize_save | l_mask2;
+    foo4 = r * foo4;
+    long long l_foo5 = foo4 * sprite_ref[0][0];
+    long long l_foo6 = foo4 * temp_v4_2_2;
+    long long sub_1 = l_foo5 - l_foo3;
+    sub_1 += l_foo4;
+    l_foo6 -= l_foo3;
+    unsigned long long l_mask3 = l_mask | sub_1;
+    l_foo6 += l_foo4;
+
+    unsigned long long testmask = l_foo6 | l_normalize_save;
+    unsigned int mask4;
 #if 1
-			for (j = 0; j < 4; j++) {
-
-				setMV(bs, priv, j); // mv
-			}
+    while(runs2 > 0 && ((testmask & 0x1) == 0))
+    {
+        save_virtual_ref_0_0_adv_2 >>= 1;
+        save_virtual_ref_0_1_adv_1 >>= 1;
+        save_virtual_ref_0_0_adv_1 >>= 1;
+        save_virtual_ref_0_1_adv_2 >>= 1;
+        l_foo6 >>= 1;
+        l_foo3 >>= 1; 
+        sub_1 >>= 1;
+        mask2 >>= 1;
+        mask4 = save_virtual_ref_0_0_adv_2 | save_virtual_ref_0_1_adv_1 | save_virtual_ref_0_0_adv_1 | save_virtual_ref_0_1_adv_2;
+        testmask = l_foo6 | sub_1 | (long long)mask2 | (long long)mask4;
+        runs2--;
+    }
+    vop->virtual_ref2[0][0] = save_virtual_ref_0_0_adv_1;
+    vop->virtual_ref2[0][1] = save_virtual_ref_0_0_adv_2;
+    vop->virtual_ref2[1][0] = save_virtual_ref_0_1_adv_1;
+    vop->virtual_ref2[1][1] = save_virtual_ref_0_1_adv_2;
+    vop->socx = (int)sub_1;
+    vop->socy = (int)l_foo6;
+    vop->mask2 = mask2;
 #endif
-		}
-		else { // intra
-			if (h->vop_coding_type == VOP_P) {
-				int i;
-#if 1
-				for (i = 0; i < 4; i++) {
-					priv->MV[0][i][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
-					priv->MV[1][i][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
-				}
-#endif
-			}
-		}
 
-#if 1
-		// motion compensation
-		if (interFlag) 
-		{
+    switch(vol->no_of_sprite_warping_points)
+    {
+        case 0:
+            vop->sprite_offset[0][0]= 0;
+            vop->sprite_offset[0][1]= 0;
+            vop->sprite_offset[1][0]= 0;
+            vop->sprite_offset[1][1]= 0;
+            vop->sprite_delta[0][0]= a;
+            vop->sprite_delta[0][1]= 0;
+            vop->sprite_delta[1][0]= 0;
+            vop->sprite_delta[1][1]= a;
+            vop->sprite_shift[0]= 0;
+            vop->sprite_shift[1]= 0;
+            break;
+        case 1: //GMC only
+            vop->sprite_offset[0][0]= sprite_ref[0][0] - a*vop_ref[0][0];
+            vop->sprite_offset[0][1]= sprite_ref[0][1] - a*vop_ref[0][1];
+            vop->sprite_offset[1][0]= ((sprite_ref[0][0]>>1)|(sprite_ref[0][0]&1)) - a*(vop_ref[0][0]/2);
+            vop->sprite_offset[1][1]= ((sprite_ref[0][1]>>1)|(sprite_ref[0][1]&1)) - a*(vop_ref[0][1]/2);
+            vop->sprite_delta[0][0]= a;
+            vop->sprite_delta[0][1]= 0;
+            vop->sprite_delta[1][0]= 0;
+            vop->sprite_delta[1][1]= a;
+            vop->sprite_shift[0]= 0;
+            vop->sprite_shift[1]= 0;
+            break;
+        case 2:
+            vop->sprite_offset[0][0]= (sprite_ref[0][0]<<(alpha+rho))
+                                                  + (-r*sprite_ref[0][0] + virtual_ref[0][0])*(-vop_ref[0][0])
+                                                  + ( r*sprite_ref[0][1] - virtual_ref[0][1])*(-vop_ref[0][1])
+                                                  + (1<<(alpha+rho-1));
+            vop->sprite_offset[0][1]= (sprite_ref[0][1]<<(alpha+rho))
+                                                  + (-r*sprite_ref[0][1] + virtual_ref[0][1])*(-vop_ref[0][0])
+                                                  + (-r*sprite_ref[0][0] + virtual_ref[0][0])*(-vop_ref[0][1])
+                                                  + (1<<(alpha+rho-1));
+            vop->sprite_offset[1][0]= ( (-r*sprite_ref[0][0] + virtual_ref[0][0])*(-2*vop_ref[0][0] + 1)
+                                     +( r*sprite_ref[0][1] - virtual_ref[0][1])*(-2*vop_ref[0][1] + 1)
+                                     +2*w2*r*sprite_ref[0][0]
+                                     - 16*w2
+                                     + (1<<(alpha+rho+1)));
+            vop->sprite_offset[1][1]= ( (-r*sprite_ref[0][1] + virtual_ref[0][1])*(-2*vop_ref[0][0] + 1)
+                                     +(-r*sprite_ref[0][0] + virtual_ref[0][0])*(-2*vop_ref[0][1] + 1)
+                                     +2*w2*r*sprite_ref[0][1]
+                                     - 16*w2
+                                     + (1<<(alpha+rho+1)));
+            vop->sprite_delta[0][0]=   (-r*sprite_ref[0][0] + virtual_ref[0][0]);
+            vop->sprite_delta[0][1]=   (+r*sprite_ref[0][1] - virtual_ref[0][1]);
+            vop->sprite_delta[1][0]=   (-r*sprite_ref[0][1] + virtual_ref[0][1]);
+            vop->sprite_delta[1][1]=   (-r*sprite_ref[0][0] + virtual_ref[0][0]);
 
-//			reconstruct(mp4_state->hdr.mb_xpos, mp4_state->hdr.mb_ypos, mp4_state->hdr.derived_mb_type);
-
-			// texture decoding add
-			for (j = 0; j < 6; j++) {
-				int coded = h->cbp & (1 << (5 - j));
-
-				if (coded) { 
-					blockInter(bs, priv, j, (coded != 0));
-					//addblockInter(j, vp->mb_xpos, vp->mb_ypos);
-				}
-			}
-		}
-		else 
-		{
-			// texture decoding add
-			for (j = 0; j < 6; j++) {
-				int coded = h->cbp & (1 << (5 - j));
-
-				blockIntra(bs, priv, j, (coded != 0));
-				//addblockIntra(j, vp->mb_xpos, vp->mb_ypos);
-			}
-		}
-#endif
-	}
-
-	// not coded macroblock
-	else {
-		priv->MV[0][0][vp->mb_ypos+1][vp->mb_xpos+1] = 
-        priv->MV[0][1][vp->mb_ypos+1][vp->mb_xpos+1] =
-		priv->MV[0][2][vp->mb_ypos+1][vp->mb_xpos+1] = 
-        priv->MV[0][3][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
-		priv->MV[1][0][vp->mb_ypos+1][vp->mb_xpos+1] = 
-        priv->MV[1][1][vp->mb_ypos+1][vp->mb_xpos+1] =
-		priv->MV[1][2][vp->mb_ypos+1][vp->mb_xpos+1] = 
-        priv->MV[1][3][vp->mb_ypos+1][vp->mb_xpos+1] = 0;
-
+            vop->sprite_shift[0]= alpha+rho;
+            vop->sprite_shift[1]= alpha+rho+2;
+            break;
+        case 3:
+            min_ab= alpha < beta ? alpha : beta;
+            w3= w2>>min_ab;
+            h3= h2>>min_ab;
 #if 0
-		//mp4_state->modemap[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = NOT_CODED; // [Review] used only in P-VOPs
-
-		//reconstruct(mp4_state->hdr.mb_xpos, mp4_state->hdr.mb_ypos, mp4_state->hdr.derived_mb_type);
+            vop->sprite_offset[0][0]=  (sprite_ref[0][0]<<(alpha+beta+rho-min_ab))
+                                   + (-r*sprite_ref[0][0] + virtual_ref[0][0])*h3*(-vop_ref[0][0])
+                                   + (-r*sprite_ref[0][0] + virtual_ref[1][0])*w3*(-vop_ref[0][1])
+                                   + (1<<(alpha+beta+rho-min_ab-1));
 #endif
-	}
+            term1  = (sprite_ref[0][0]<<(alpha+beta+rho-min_ab));
+            temp  = (-r*sprite_ref[0][0] + virtual_ref[0][0]);
+            term2  = temp * h3 * (-vop_ref[0][0]);
+            temp  = (-r*sprite_ref[0][0] + virtual_ref[1][0]);
+            term3  = temp * w3 * (-vop_ref[0][1]);
+            term4  = (1<<(alpha+beta+rho-min_ab-1));
+            vop->sprite_offset[0][0]=  term1
+                                   + term2
+                                   + term3
+                                   + term4;
 
-	//mp4_state->quant_store[mp4_state->hdr.mb_ypos+1][mp4_state->hdr.mb_xpos+1] = mp4_state->hdr.quantizer;
+            int temp_sp_1_1 = (sprite_ref[0][1]<<(alpha+beta+rho-min_ab));
+            int temp_sp_1_2 = (-r*sprite_ref[0][1] + virtual_ref[0][1])*h3*(-vop_ref[0][0]);
+            int temp_sp_1_3 = (-r*sprite_ref[0][1] + virtual_ref[1][1])*w3*(-vop_ref[0][1]);
+            int temp_sp_1_4 = (1<<(alpha+beta+rho-min_ab-1));
+            vop->sprite_offset[0][1]=  temp_sp_1_1
+                                   + temp_sp_1_2
+                                   + temp_sp_1_3
+                                   + temp_sp_1_4;
 
-	if (priv->pkt_hdr.mb_xpos < (priv->pkt_hdr.mb_width-1)) {
-		priv->pkt_hdr.mb_xpos++;
-	}
-	else {
-		priv->pkt_hdr.mb_ypos++;
-		priv->pkt_hdr.mb_xpos = 0;
-	}
+            int temp_sp_2_1 = (-r*sprite_ref[0][0] + virtual_ref[0][0])*h3*(-2*vop_ref[0][0] + 1);
+            int temp_sp_2_2 = (-r*sprite_ref[0][0] + virtual_ref[1][0])*w3*(-2*vop_ref[0][1] + 1);
+            int temp_sp_2_3 = 2*w2*h3*r*sprite_ref[0][0];
+            int temp_sp_2_4 = 16*w2*h3;
+            int temp_sp_2_5 = (1<<(alpha+beta+rho-min_ab+1));
+            vop->sprite_offset[1][0]=  temp_sp_2_1
+                                   + temp_sp_2_2
+                                   + temp_sp_2_3
+                                   - temp_sp_2_4
+                                   + temp_sp_2_5;
 
-	return 1;
+            int temp_sp_3_1 = (-r*sprite_ref[0][1] + virtual_ref[0][1])*h3*(-2*vop_ref[0][0] + 1);
+            int temp_sp_3_2 = (-r*sprite_ref[0][1] + virtual_ref[1][1])*w3*(-2*vop_ref[0][1] + 1);
+            int temp_sp_3_3 = 2*w2*h3*r*sprite_ref[0][1];
+            int temp_sp_3_4 = 16*w2*h3;
+            int temp_sp_3_5 = (1<<(alpha+beta+rho-min_ab+1));
+            vop->sprite_offset[1][1]=  temp_sp_3_1
+                                   + temp_sp_3_2
+                                   + temp_sp_3_3
+                                   - temp_sp_3_4
+                                   + temp_sp_3_5;
+
+            vop->sprite_delta[0][0]=   (-r*sprite_ref[0][0] + virtual_ref[0][0])*h3;
+            vop->sprite_delta[0][1]=   (-r*sprite_ref[0][0] + virtual_ref[1][0])*w3;
+            vop->sprite_delta[1][0]=   (-r*sprite_ref[0][1] + virtual_ref[0][1])*h3;
+            vop->sprite_delta[1][1]=   (-r*sprite_ref[0][1] + virtual_ref[1][1])*w3;
+
+            vop->sprite_shift[0]= runs; //alpha + beta + rho - min_ab;
+            vop->sprite_shift[1]= runs2; //alpha + beta + rho - min_ab + 2;
+
+            vop->mv5_upper = vop->sprite_ref[0][0] & 0x7fff;
+            vop->mv5_lower = vop->sprite_ref[0][1] & 0x7fff; 
+            vop->mv6_upper = (((vop->socx + save_virtual_ref_0_0_adv_1 + save_virtual_ref_0_0_adv_2) >> vop->sprite_shift[1]) << rho) & 0x7fff;
+            vop->mv6_lower = (((vop->socy + save_virtual_ref_0_1_adv_1 + save_virtual_ref_0_1_adv_2) >> vop->sprite_shift[1]) << rho) & 0x7fff;
+
+            break;
+    }
+#if 1
+    /* try to simplify the situation */
+    if(   vop->sprite_delta[0][0] == a<<vop->sprite_shift[0]
+       && vop->sprite_delta[0][1] == 0
+       && vop->sprite_delta[1][0] == 0
+       && vop->sprite_delta[1][1] == a<<vop->sprite_shift[0])
+    {
+        vop->sprite_offset_impr[0][0]>>=vop->sprite_shift[0];
+        vop->sprite_offset_impr[0][1]>>=vop->sprite_shift[0];
+        vop->sprite_offset_impr[1][0]>>=vop->sprite_shift[1];
+        vop->sprite_offset_impr[1][1]>>=vop->sprite_shift[1];
+        vop->sprite_delta_impr[0][0]= a;
+        vop->sprite_delta_impr[0][1]= 0;
+        vop->sprite_delta_impr[1][0]= 0;
+        vop->sprite_delta_impr[1][1]= a;
+        vop->sprite_shift_impr[0]= 0;
+        vop->sprite_shift_impr[1]= 0;
+        vop->real_sprite_warping_points=1;
+    }
+    else{
+        int shift_y= 16 - vop->sprite_shift[0];
+        int shift_c= 16 - vop->sprite_shift[1];
+        for(i=0; i<2; i++){
+            vop->sprite_offset_impr[0][i] = vop->sprite_offset[0][i] << shift_y;
+            vop->sprite_offset_impr[1][i] = vop->sprite_offset[0][i] << shift_c;
+            vop->sprite_delta_impr[0][i] = vop->sprite_delta[0][i] << shift_y;
+            vop->sprite_delta_impr[1][i] = vop->sprite_delta[0][i] << shift_y;
+            vop->sprite_shift_impr[i]= 16;
+        }
+        vop->real_sprite_warping_points=vol->no_of_sprite_warping_points;
+    }
+#endif
+    return 0;
 }
 
 static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info, mp4_private_t *priv)
@@ -712,73 +1545,138 @@ static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info
 	if (!get_bits(bs, 1))
 		return 0;
 
-	// rounding_type
-	if (h->vop_coding_type == VOP_P)
+        if(vol->newpred_enable)
+        {
+            //t.b.d
+        }
+        if((vol->video_object_layer_shape != BIN_ONLY_SHAPE) &&
+            (h->vop_coding_type == VOP_P ||
+            (h->vop_coding_type == VOP_S && vol->sprite_enable == GMC_SPRITE)))
 		get_bits(bs, 1);
 
-	h->intra_dc_vlc_thr = get_bits(bs, 3);
+        if ((vol->reduced_resolution_vop_enable) &&
+            (vol->video_object_layer_shape == RECT_SHAPE) &&
+            ((h->vop_coding_type == VOP_P) || (h->vop_coding_type == VOP_I)))
+                h->vop_reduced_resolution  = get_bits(bs,1);
 
-    if(vol->video_object_layer_shape != BIN_ONLY_SHAPE) {
-        // assume default size of 5 bits
-        h->vop_quant = get_bits(bs, vol->quant_precision);
-
-        // vop_fcode_forward
-        if (h->vop_coding_type != VOP_I)
-            h->fcode_forward=get_bits(bs, 3);
-
-        // vop_fcode_backward
-        if (h->vop_coding_type == VOP_B)
-            h->fcode_backward=get_bits(bs, 3);
-
-        if(!vol->scalability) {
-            if(vol->video_object_layer_shape != RECT_SHAPE && 
-                    (h->vop_coding_type != VOP_I)) {
-                int vop_shape_coding_type = get_bits(bs, 1);
+        if (vol->video_object_layer_shape != RECT_SHAPE) { 
+            if(!(vol->sprite_enable == STATIC_SPRITE && h->vop_coding_type == VOP_I)) { 
+                h->vop_width = get_bits(bs, 13);
+                if (get_bits(bs, 1) != 1)
+                        VDPAU_DBG("vop header marker error");
+                h->vop_height = get_bits(bs, 13);
+                if (get_bits(bs, 1) != 1)
+                        VDPAU_DBG("vop header marker error");
+                h->vop_horizontal_mc_spatial_ref =get_bits(bs, 13);
+                if (get_bits(bs, 1) != 1)
+                        VDPAU_DBG("vop header marker error");
+                h->vop_vertical_mc_spatial_ref =get_bits(bs, 13);
+                if (get_bits(bs, 1) != 1)
+                        VDPAU_DBG("vop header marker error");
+            } 
+            if ((vol->video_object_layer_shape != BIN_ONLY_SHAPE) &&
+                vol->scalability && vol->enhancement_type)
+                    h->background_composition = get_bits(bs, 1);
+            h->change_conv_ratio_disable =get_bits(bs, 1);
+            h->vop_constant_alpha = get_bits(bs, 1);
+            if (h->vop_constant_alpha) 
+                h->vop_constant_alpha_value = get_bits(bs, 8);
+        } 
+        if (vol->video_object_layer_shape != BIN_ONLY_SHAPE) 
+            if (!vol->complexity_estimation_disable) {
+                //read_vop_complexity_estimation_header();
             }
-            //motion_shape_texture()
-            //video_packet_header()
-            //motion_shape_texture()
-        }
-        else {
-            if(vol->enhancement_type) {
-                int load_backward_shape = get_bits(bs, 1);
-                if(load_backward_shape) {
-                    int backward_shape_width = get_bits(bs, 13);
-                    //marker_bits
-                    get_bits(bs,1);
-                    int backward_shape_height = get_bits(bs, 13);
-                    //marker_bits
-                    get_bits(bs,1);
-                    int backward_shape_horizontal_mc_spatial_ref = get_bits(bs, 13);
-                    //marker_bits
-                    get_bits(bs,1);
-                    int backward_shape_vertical_mc_spatial_ref = get_bits(bs, 13);
-                    //marker_bits
-                    get_bits(bs,1);
-                    //backward_shape()
-                    int load_forward_shape = get_bits(bs, 1);
-                    if(load_forward_shape) {
-                        int forward_shape_width = get_bits(bs, 13);
+        if (vol->video_object_layer_shape != BIN_ONLY_SHAPE) { 
+            h->intra_dc_vlc_thr = get_bits(bs, 3);
+            if (vol->interlaced) { 
+                h->top_field_first = get_bits(bs, 1);
+                h->alternate_vertical_scan_flag = get_bits(bs, 1);
+            } 
+        } 
+        if ((vol->sprite_enable == STATIC_SPRITE || vol->sprite_enable==GMC_SPRITE) &&
+            h->vop_coding_type == VOP_S) {
+            if (vol->no_of_sprite_warping_points > 0) 
+                mpeg4_decode_sprite_trajectory(bs, priv); 
+#if 0
+            if (vol->sprite_brightness_change)
+                brightness_change_factor() 
+            if(vol->sprite_enable == STATIC_SPRITE) { 
+                if (h->sprite_transmit_mode != “stop”
+                    && vol->low_latency_sprite_enable) {
+                    do { 
+                        h->sprite_transmit_mode = get_bits(bs, 2);
+                        if ((h->sprite_transmit_mode == “piece”) ||
+                            (h->sprite_transmit_mode == “update”))
+                            decode_sprite_piece() 
+                    } while (h->sprite_transmit_mode != “stop” &&
+                        h->sprite_transmit_mode != “pause”)
+                } 
+                next_start_code() 
+                return() 
+            } 
+#endif
+        } 
+
+        if(vol->video_object_layer_shape != BIN_ONLY_SHAPE) {
+            h->vop_quant = get_bits(bs, vol->quant_precision);
+
+            // vop_fcode_forward
+            if (h->vop_coding_type != VOP_I)
+                h->fcode_forward=get_bits(bs, 3);
+    
+            // vop_fcode_backward
+            if (h->vop_coding_type == VOP_B)
+                h->fcode_backward=get_bits(bs, 3);
+    
+            if(!vol->scalability) {
+                if(vol->video_object_layer_shape != RECT_SHAPE && 
+                        (h->vop_coding_type != VOP_I)) {
+                    int vop_shape_coding_type = get_bits(bs, 1);
+                }
+                //motion_shape_texture()
+                //video_packet_header()
+                //motion_shape_texture()
+            }
+            else {
+                if(vol->enhancement_type) {
+                    int load_backward_shape = get_bits(bs, 1);
+                    if(load_backward_shape) {
+                        int backward_shape_width = get_bits(bs, 13);
                         //marker_bits
                         get_bits(bs,1);
-                        int forward_shape_height = get_bits(bs, 13);
+                        int backward_shape_height = get_bits(bs, 13);
                         //marker_bits
                         get_bits(bs,1);
-                        int forward_shape_horizontal_mc_spatial_ref = get_bits(bs,13);
+                        int backward_shape_horizontal_mc_spatial_ref = get_bits(bs, 13);
                         //marker_bits
                         get_bits(bs,1);
-                        int forward_shape_vertical_mc_spatial_ref = get_bits(bs,13);
-                        //forward_shape()
+                        int backward_shape_vertical_mc_spatial_ref = get_bits(bs, 13);
+                        //marker_bits
+                        get_bits(bs,1);
+                        //backward_shape()
+                        int load_forward_shape = get_bits(bs, 1);
+                        if(load_forward_shape) {
+                            int forward_shape_width = get_bits(bs, 13);
+                            //marker_bits
+                            get_bits(bs,1);
+                            int forward_shape_height = get_bits(bs, 13);
+                            //marker_bits
+                            get_bits(bs,1);
+                            int forward_shape_horizontal_mc_spatial_ref = get_bits(bs,13);
+                            //marker_bits
+                            get_bits(bs,1);
+                            int forward_shape_vertical_mc_spatial_ref = get_bits(bs,13);
+                            //forward_shape()
+                        }
                     }
                 }
+                int ref_select_code = get_bits(bs, 2);
+                //combined_motion_shape_texture() 
             }
-            int ref_select_code = get_bits(bs, 2);
+        }
+        else {
             //combined_motion_shape_texture() 
         }
-    }
-    else {
-        //combined_motion_shape_texture() 
-    }
 	return 1;
 }
 #if 1
@@ -860,13 +1758,12 @@ static int mpeg4_decode_packet_header(bitstream *gb, VdpPictureInfoMPEG4Part2 co
             get_bits(gb, 3); /* intra dc vlc threshold */
             // FIXME don't just ignore everything
 
-            if (vol->video_object_type_indication == AV_PICTURE_TYPE_S &&
+            if (priv->vop_header.vop_coding_type == VOP_S &&
                 vol->sprite_enable == GMC_SPRITE) {
-#if 0
-                if (mpeg4_decode_sprite_trajectory(ctx, &s->gb) < 0)
-                    return AVERROR_INVALIDDATA;
+#if 1
+                if (mpeg4_decode_sprite_trajectory(gb, priv) < 0)
+                    return 1;
 #endif
-                printf("untested\n");
             }
 
             // FIXME reduced res stuff here
@@ -886,341 +1783,26 @@ static int mpeg4_decode_packet_header(bitstream *gb, VdpPictureInfoMPEG4Part2 co
 }
 #endif
 
-#if 0
-static int decode_vol_header(bitstream *gb, vol_header_t *s)
-{
-    int vo_ver_id;
-
-    /* vol header */
-    get_bits(gb, 1);                   /* random access */
-    s->vo_type = get_bits(gb, 8);
-    if (get_bits(gb,1) != 0) {         /* is_ol_id */
-        vo_ver_id = get_bits(gb, 4);   /* vo_ver_id */
-        get_bits(gb, 3);               /* vo_priority */
-    } else {
-        vo_ver_id = 1;
-    }
-    s->aspect_ratio_info = get_bits(gb, 4);
-#if 0
-    if (s->aspect_ratio_info == FF_ASPECT_EXTENDED) {
-        printf("extended aspect not implemented\n");
-    } else {
-        printf("aspect not implemented\n");
-    }
-#endif
-
-    if ((s->vol_control_parameters = get_bits(gb,1))) { /* vol control parameter */
-        int chroma_format = get_bits(gb, 2);
-#if 0
-        if (chroma_format != CHROMA_420)
-            av_log(s->avctx, AV_LOG_ERROR, "illegal chroma format\n");
-#endif
-
-        s->low_delay = get_bits(gb,1);
-        if (get_bits(gb,1)) {    /* vbv parameters */
-            get_bits(gb, 15);   /* first_half_bitrate */
-            get_bits(gb,1);     /* marker */
-            get_bits(gb, 15);   /* latter_half_bitrate */
-            get_bits(gb,1);     /* marker */
-            get_bits(gb, 15);   /* first_half_vbv_buffer_size */
-            get_bits(gb,1);     /* marker */
-            get_bits(gb, 3);    /* latter_half_vbv_buffer_size */
-            get_bits(gb, 11);   /* first_half_vbv_occupancy */
-            get_bits(gb,1);     /* marker */
-            get_bits(gb, 15);   /* latter_half_vbv_occupancy */
-            get_bits(gb,1);     /* marker */
-        }
-    } else {
-        /* is setting low delay flag only once the smartest thing to do?
-         * low delay detection won't be overriden. */
-        if (s->picture_number == 0)
-            s->low_delay = 0;
-    }
-
-    s->shape = get_bits(gb, 2); /* vol shape */
-    if (s->shape != RECT_SHAPE)
-        printf("only rectangular vol supported\n");
-    if (s->shape == GRAY_SHAPE && vo_ver_id != 1) {
-        printf("Gray shape not supported\n");
-        get_bits(gb, 4);  /* video_object_layer_shape_extension */
-    }
-
-    get_bits(gb, 1);
-
-    s->time_base_den = get_bits(gb, 16);
-#if 0
-    if (!s->time_base.den) {
-        av_log(s->avctx, AV_LOG_ERROR, "time_base.den==0\n");
-        s->avctx->time_base.num = 0;
-        return -1;
-    }
-#endif
-
-    s->time_increment_bits = (31 - __builtin_clz((s->time_base_den - 1)|1)) + 1;
-    if (s->time_increment_bits < 1)
-        s->time_increment_bits = 1;
-
-    get_bits(gb, 1);
-
-    if (get_bits(gb,1) != 0)     /* fixed_vop_rate  */
-        s->time_base_num = get_bits(gb, s->time_increment_bits);
-    else
-        s->time_base_num = 1;
-
-    //ctx->t_frame = 0;
-
-    if (s->shape != BIN_ONLY_SHAPE) {
-        if (s->shape == RECT_SHAPE) {
-            get_bits(gb,1);   /* marker */
-            s->width = get_bits(gb, 13);
-            get_bits(gb,1);   /* marker */
-            s->height = get_bits(gb, 13);
-            get_bits(gb,1);   /* marker */
-        }
-
-        get_bits(gb,1) ^ 1;
-        get_bits(gb,1);
-        if (vo_ver_id == 1)
-            s->vol_sprite_usage = get_bits(gb,1);    /* vol_sprite_usage */
-        else
-            s->vol_sprite_usage = get_bits(gb, 2);  /* vol_sprite_usage */
-
-        if (s->vol_sprite_usage == STATIC_SPRITE ||
-            s->vol_sprite_usage == GMC_SPRITE) {
-            if (s->vol_sprite_usage == STATIC_SPRITE) {
-                get_bits(gb, 13); // sprite_width
-                get_bits(gb,1); /* marker */
-                get_bits(gb, 13); // sprite_height
-                get_bits(gb,1); /* marker */
-                get_bits(gb, 13); // sprite_left
-                get_bits(gb,1); /* marker */
-                get_bits(gb, 13); // sprite_top
-                get_bits(gb,1); /* marker */
-            }
-            s->num_sprite_warping_points = get_bits(gb, 6);
-            s->sprite_warping_accuracy  = get_bits(gb, 2);
-            s->sprite_brightness_change = get_bits(gb,1);
-            if (s->vol_sprite_usage == STATIC_SPRITE)
-                get_bits(gb,1); // low_latency_sprite
-        }
-        // FIXME sadct disable bit if verid!=1 && shape not rect
-
-        if (get_bits(gb,1) == 1) {                   /* not_8_bit */
-            s->quant_precision = get_bits(gb, 4);   /* quant_precision */
-            if (get_bits(gb, 4) != 8)               /* bits_per_pixel */
-                printf("N-bit not supported\n");
-            if (s->quant_precision != 5)
-                printf("quant precision %d\n", s->quant_precision);
-        } else {
-            s->quant_precision = 5;
-        }
-
-        // FIXME a bunch of grayscale shape things
-
-        if ((s->mpeg_quant = get_bits(gb,1))) { /* vol_quant_type */
-            int i, v;
-
-#if 0
-            /* load default matrixes */
-            for (i = 0; i < 64; i++) {
-                int j = s->dsp.idct_permutation[i];
-                v = ff_mpeg4_default_intra_matrix[i];
-                s->intra_matrix[j]        = v;
-                s->chroma_intra_matrix[j] = v;
-
-                v = ff_mpeg4_default_non_intra_matrix[i];
-                s->inter_matrix[j]        = v;
-                s->chroma_inter_matrix[j] = v;
-            }
-#endif
-
-            /* load custom intra matrix */
-            if (get_bits(gb,1)) {
-                int last = 0;
-                for (i = 0; i < 64; i++) {
-                    int j;
-                    v = get_bits(gb, 8);
-                    if (v == 0)
-                        break;
-
-#if 0
-                    last = v;
-                    j = s->dsp.idct_permutation[ff_zigzag_direct[i]];
-                    s->intra_matrix[j]        = last;
-                    s->chroma_intra_matrix[j] = last;
-#endif
-                }
-
-#if 0
-                /* replicate last value */
-                for (; i < 64; i++) {
-                    int j = s->dsp.idct_permutation[ff_zigzag_direct[i]];
-                    s->intra_matrix[j]        = last;
-                    s->chroma_intra_matrix[j] = last;
-                }
-#endif
-            }
-
-            /* load custom non intra matrix */
-            if (get_bits(gb,1)) {
-                int last = 0;
-                for (i = 0; i < 64; i++) {
-                    int j;
-                    v = get_bits(gb, 8);
-                    if (v == 0)
-                        break;
-
-#if 0
-                    last = v;
-                    j = s->dsp.idct_permutation[ff_zigzag_direct[i]];
-                    s->inter_matrix[j]        = v;
-                    s->chroma_inter_matrix[j] = v;
-#endif
-                }
-
-#if 0
-                /* replicate last value */
-                for (; i < 64; i++) {
-                    int j = s->dsp.idct_permutation[ff_zigzag_direct[i]];
-                    s->inter_matrix[j]        = last;
-                    s->chroma_inter_matrix[j] = last;
-                }
-#endif
-            }
-
-            // FIXME a bunch of grayscale shape things
-        }
-
-        if (vo_ver_id != 1)
-            s->quarter_sample = get_bits(gb,1);
-        else
-            s->quarter_sample = 0;
-
-        if (!get_bits(gb,1)) {
-            int pos               = gb->bitpos;
-            int estimation_method = get_bits(gb, 2);
-            if (estimation_method < 2) {
-                if (!get_bits(gb,1)) {
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* opaque */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* transparent */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* intra_cae */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* inter_cae */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* no_update */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* upampling */
-                }
-                if (!get_bits(gb,1)) {
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* intra_blocks */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* inter_blocks */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* inter4v_blocks */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* not coded blocks */
-                }
-                if (!get_bits(gb, 1)) {
-                    //skip_bits_long(gb, pos - get_bits_count(gb));
-                    gb->bitpos += pos - gb->bitpos;
-                    goto no_cplx_est;
-                }
-                if (!get_bits(gb,1)) {
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* dct_coeffs */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* dct_lines */
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* vlc_syms */
-                    s->cplx_estimation_trash_i += 4 * get_bits(gb,1);  /* vlc_bits */
-                }
-                if (!get_bits(gb,1)) {
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* apm */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* npm */
-                    s->cplx_estimation_trash_b += 8 * get_bits(gb,1);  /* interpolate_mc_q */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* forwback_mc_q */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* halfpel2 */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* halfpel4 */
-                }
-                if (!get_bits(gb, 1)) {
-                    //skip_bits_long(gb, pos - get_bits_count(gb));
-                    gb->bitpos += pos-gb->bitpos;
-                    goto no_cplx_est;
-                }
-                if (estimation_method == 1) {
-                    s->cplx_estimation_trash_i += 8 * get_bits(gb,1);  /* sadct */
-                    s->cplx_estimation_trash_p += 8 * get_bits(gb,1);  /* qpel */
-                }
-            } else
-                printf("Invalid Complexity estimation method %d\n",
-                       estimation_method);
-        } else {
-
-no_cplx_est:
-            s->cplx_estimation_trash_i =
-            s->cplx_estimation_trash_p =
-            s->cplx_estimation_trash_b = 0;
-        }
-
-        s->resync_marker = !get_bits(gb,1); /* resync_marker_disabled */
-
-        s->data_partitioning = get_bits(gb,1);
-        if (s->data_partitioning)
-            s->rvlc = get_bits(gb,1);
-
-        if (vo_ver_id != 1) {
-            s->new_pred = get_bits(gb,1);
-            if (s->new_pred) {
-                printf("new pred not supported\n");
-                get_bits(gb, 2); /* requested upstream message type */
-                get_bits(gb,1);   /* newpred segment type */
-            }
-            if (get_bits(gb,1)) // reduced_res_vop
-                printf("reduced resolution VOP not supported\n");
-        } else {
-            s->new_pred = 0;
-        }
-
-        s->scalability = get_bits(gb,1);
-
-        if (s->scalability) {
-            bitstream bak = *gb;
-            int h_sampling_factor_n;
-            int h_sampling_factor_m;
-            int v_sampling_factor_n;
-            int v_sampling_factor_m;
-
-            get_bits(gb, 1);    // hierarchy_type
-            get_bits(gb, 4);  /* ref_layer_id */
-            get_bits(gb, 1);    /* ref_layer_sampling_dir */
-            h_sampling_factor_n = get_bits(gb, 5);
-            h_sampling_factor_m = get_bits(gb, 5);
-            v_sampling_factor_n = get_bits(gb, 5);
-            v_sampling_factor_m = get_bits(gb, 5);
-            s->enhancement_type = get_bits(gb, 1);
-
-            if (h_sampling_factor_n == 0 || h_sampling_factor_m == 0 ||
-                v_sampling_factor_n == 0 || v_sampling_factor_m == 0) {
-                /* illegal scalability header (VERY broken encoder),
-                 * trying to workaround */
-                s->scalability = 0;
-                *gb            = bak;
-            } else
-                printf("scalability not supported\n");
-
-            // bin shape stuff FIXME
-        }
-    }
-
-}
-#endif
-
 static unsigned long num_pics=0;
 static unsigned long num_longs=0;
 int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, const int len, video_surface_ctx_t *output)
 {
-	VdpPictureInfoMPEG4Part2 const *info = (VdpPictureInfoMPEG4Part2 const *)_info;
-	mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
+    VdpPictureInfoMPEG4Part2 const *info = (VdpPictureInfoMPEG4Part2 const *)_info;
+    mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
+    VdpDecoderMpeg4VolHeader *vol = &decoder_p->mpeg4VolHdr;
 
     uint32_t    startcode;
     int        more_mbs = 1;
     uint32_t   mp4mbaAddr_reg = 0;
+    decoder_p->pkt_hdr.mb_xpos = 0;
+    decoder_p->pkt_hdr.mb_ypos = 0;
+    uint32_t mba_reg = 0x0;
+    static int vop_s_frame_seen = 0;
 
     if(!decoder_p->mpeg4VolHdrSet)
     {
         VDPAU_DBG("MPEG4 VOL Header must be set prior decoding of frames! Sorry");
-		return VDP_STATUS_ERROR;
+        return VDP_STATUS_ERROR;
     }
 
 	int i;
@@ -1241,16 +1823,19 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
         if ( startcode != 0xb6)
 			continue;
 
-        memset(&decoder_p->vop_header, 0, sizeof(decoder_p->vop_header));
-        decoder_p->vop_header.fcode_forward = 1;
-        decoder_p->vop_header.fcode_backward = 1;
-		if (!decode_vop_header(&bs, info, decoder_p))
-			continue;
+        //memset(&decoder_p->vop_header, 0, sizeof(decoder_p->vop_header));
+        //decoder_p->vop_header.fcode_forward = 1;
+        //decoder_p->vop_header.fcode_backward = 1;
+            if (!decode_vop_header(&bs, info, decoder_p))
+                    continue;
 
+            bitstream bs1 = bs;
+            macroblock(&bs, decoder_p);
+            bs=bs1;
             // activate MPEG engine
             writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
             
-#if 0
+#if 1
             // set quantisation tables
             for (i = 0; i < 64; i++)
                 writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
@@ -1282,7 +1867,8 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             {
                 writel((info->trb[0] << 16) | (info->trd[0] << 0), ve_regs + VE_MPEG_TRBTRD_FRAME);
                 // unverified:
-                writel((info->trb[1] << 16) | (info->trd[1] << 0), ve_regs + VE_MPEG_TRBTRD_FIELD);
+                //writel((info->trb[1] << 16) | (info->trd[1] << 0), ve_regs + VE_MPEG_TRBTRD_FIELD);
+                writel(0, ve_regs + VE_MPEG_TRBTRD_FIELD);
             }
             // set size
             uint16_t width  = (decoder_p->mpeg4VolHdr.video_object_layer_width + 15) / 16;
@@ -1326,6 +1912,9 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                         // ??
             uint32_t ve_control = 0;
             ve_control |= 0x80000000;
+            if(decoder_p->vop_header.vop_coding_type != VOP_I && vol->quarter_sample != 0)
+                ve_control |= (1 << 20);
+
             ve_control |= (1 << 19);
             //if not divx then 1, else 2 (but divx version dependent)
             ve_control |= (1 << 14);
@@ -1344,28 +1933,44 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             mp4mbaAddr_reg = 0;
             writel(mp4mbaAddr_reg, ve_regs + VE_MPEG_MBA);
 
-            decoder_p->pkt_hdr.mb_xpos = 0;
-            decoder_p->pkt_hdr.mb_ypos = 0;
-            uint32_t mba_reg = 0x0;
-            
             while(more_mbs == 1) {
+
+                //workaround: currently it is unclear what the meaning of bit 20/21 is
+                if(decoder_p->vop_header.vop_coding_type == VOP_S)
+                    vop_s_frame_seen = 3;
 
                 uint32_t vop_hdr = 0;
                 vop_hdr |= (info->interlaced & 0x1) << 30;
-                vop_hdr |= (decoder_p->vop_header.vop_coding_type == VOP_B ? 0x1 : 0x0) << 28;
+                int vop_coding;
+                switch(decoder_p->vop_header.vop_coding_type) {
+                    case VOP_B:
+                        vop_coding = 1;
+                        if(decoder_p->vop_header.last_coding_type == VOP_S)
+                            vop_coding = 3;
+                        break;
+                    default:
+                        vop_coding = 0;
+                }
+                vop_hdr |= vop_coding << 28;
+                vop_hdr |= (vol->no_of_sprite_warping_points & 0x3) << 25;
                 vop_hdr |= (info->quant_type & 0x1) << 24;
                 vop_hdr |= (info->quarter_sample & 0x1) << 23;
                 vop_hdr |= (info->resync_marker_disable & 0x1) << 22; //error_res_disable
+                vop_hdr |= (vop_s_frame_seen & 0x3) << 20;
                 vop_hdr |= (decoder_p->vop_header.vop_coding_type & 0x3) << 18;
                 vop_hdr |= (info->rounding_control &0x1) << 17;
-                vop_hdr |= (decoder_p->vop_header.intra_dc_vlc_thr & 0x7) << 8;
+                if(vol->sprite_enable != GMC_SPRITE) 
+                    vop_hdr |= (decoder_p->vop_header.intra_dc_vlc_thr & 0x7) << 8;
                 vop_hdr |= (info->top_field_first& 0x1) << 7;
                 vop_hdr	|= (info->alternate_vertical_scan_flag & 0x1) << 6;
                 vop_hdr	|= (decoder_p->vop_header.vop_coding_type != VOP_I ? 
                                 info->vop_fcode_forward & 0x7 : 0) << 3;
-                vop_hdr	|= (decoder_p->vop_header.vop_coding_type == VOP_B ? 
-                                info->vop_fcode_backward & 0x7 : 0) << 0;
+                //vop_hdr	|= (decoder_p->vop_header.vop_coding_type == VOP_B ? 
+                //                info->vop_fcode_backward & 0x7 : 0) << 0;
+                vop_hdr	|= decoder_p->vop_header.fcode_backward & 0x7 << 0;
                 writel(vop_hdr, ve_regs + VE_MPEG_VOP_HDR);
+
+                decoder_p->vop_header.last_coding_type = decoder_p->vop_header.vop_coding_type;
                 
                 writel(decoder_p->vop_header.vop_quant, ve_regs + VE_MPEG_QP_INPUT);
                 
@@ -1382,7 +1987,8 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 writel(bs.bitpos, ve_regs + VE_MPEG_VLD_OFFSET);
 
                 // set input length in bits
-                writel((len*8 - bs.bitpos), ve_regs + VE_MPEG_VLD_LEN);
+                //writel(((len*8 - bs.bitpos)), ve_regs + VE_MPEG_VLD_LEN);
+                writel(((len*8 - bs.bitpos)+31) & ~0x1f, ve_regs + VE_MPEG_VLD_LEN);
 
                 // input end
                 uint32_t input_addr = ve_virt2phys(decoder->data);
@@ -1393,7 +1999,35 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 
                 writel(0x0, ve_regs + VE_MPEG_MSMPEG4_HDR);
                 writel(0x0, ve_regs + VE_MPEG_CTR_MB);
-            
+
+                if(decoder_p->vop_header.vop_coding_type == VOP_S)
+                {
+                    uint32_t mpeg_sdlx = decoder_p->vop_header.virtual_ref2[0][0]<<16 | 
+                            (decoder_p->vop_header.virtual_ref2[1][0] & 0xffff);
+                    writel(mpeg_sdlx, ve_regs + VE_MPEG_SDLX);
+                    writel(mpeg_sdlx, ve_regs + VE_MPEG_SDCX);
+    
+                    int32_t mpeg_sdly =  decoder_p->vop_header.virtual_ref2[0][1]<<16 | 
+                            (decoder_p->vop_header.virtual_ref2[1][1] & 0xffff);
+                    writel(mpeg_sdly, ve_regs + VE_MPEG_SDLY);
+                    writel(mpeg_sdly, ve_regs + VE_MPEG_SDCY);
+                
+                    uint32_t mpeg_spriteshift = (decoder_p->vop_header.sprite_shift[0] & 0xff);
+                    mpeg_spriteshift |= ((decoder_p->vop_header.sprite_shift[1] & 0xff) << 8);
+                    writel(mpeg_spriteshift, ve_regs + VE_MPEG_SPRITESHIFT);
+
+                    uint32_t mpeg_sol = decoder_p->vop_header.sprite_ref[0][0] << 16;
+                    mpeg_sol |= (decoder_p->vop_header.sprite_ref[0][1] & 0xffff);
+                    writel(mpeg_sol, ve_regs + VE_MPEG_SOL);
+
+                    writel(decoder_p->vop_header.socx, ve_regs + VE_MPEG_SOCX);
+                    writel(decoder_p->vop_header.socy, ve_regs + VE_MPEG_SOCY);
+
+                    int mv5 = decoder_p->vop_header.mv5_upper << 16 | decoder_p->vop_header.mv5_lower;
+                    int mv6 = decoder_p->vop_header.mv6_upper << 16 | decoder_p->vop_header.mv6_lower;
+                    writel(mv5, ve_regs + VE_MPEG_MV5);
+                    writel(mv6, ve_regs + VE_MPEG_MV6);
+                }
                 // trigger
                 int vbv_size = width * height;
                 uint32_t mpeg_trigger = 0;
@@ -1405,7 +2039,6 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 
                 // wait for interrupt
 #ifdef TIMEMEAS
-                ++num_pics;
             uint64_t tv, tv2;
                 tv = get_time();
 #endif
@@ -1418,6 +2051,13 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 #endif
                 // clean interrupt flag
                 writel(0x0000c00f, ve_regs + VE_MPEG_STATUS);
+                int error = readl(ve_regs + VE_MPEG_ERROR);
+                if(error)
+                    printf("got error=%d while decoding frame=%ld\n", error, num_pics);
+                writel(0x0, ve_regs + VE_MPEG_ERROR);
+
+                ++num_pics;
+
                 int veCurPos = readl(ve_regs + VE_MPEG_VLD_OFFSET);
                 int byteCurPos = (veCurPos+7) / 8;
 
@@ -1522,7 +2162,11 @@ VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder)
     decoder->setVideoControlData = mpeg4_setVideoControlData;
 
     save_tables(&decoder_p->tables);
-    
+
+            INIT_VLC_STATIC(&sprite_trajectory, SPRITE_TRAJ_VLC_BITS, 15,
+                 &ff_sprite_trajectory_tab[0][1], 4, 2,
+                 &ff_sprite_trajectory_tab[0][0], 4, 2, 128);
+
 	return VDP_STATUS_OK;
 
 err_ncf:

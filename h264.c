@@ -782,13 +782,18 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 		writel(0x8, c->regs + VE_H264_TRIGGER);
 
 		++num_pics;
+#if TIME_MEAS
 uint64_t tv, tv2;
 		tv = get_time();
+#endif
 		ve_wait(1);
+
+#if TIME_MEAS
 		tv2 = get_time();
-		if (tv2-tv > 10000000) {
-			printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+		if (tv2-tv > 20000000) {
+			printf("ve_wait, longer than 20ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
 		}
+#endif
 
 		// clear status flags
 		writel(readl(c->regs + VE_H264_STATUS), c->regs + VE_H264_STATUS);

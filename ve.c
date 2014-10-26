@@ -26,6 +26,8 @@
 #include <sys/mman.h>
 #include "ve.h"
 
+#include <valgrind/ammt_reqs.h>
+
 #define DEVICE "/dev/cedar_dev"
 #define PAGE_OFFSET (0xc0000000) // from kernel
 #define PAGE_SIZE (4096)
@@ -102,6 +104,11 @@ int ve_open(void)
 	regs = mmap(NULL, 0x800, PROT_READ | PROT_WRITE, MAP_SHARED, fd, ve.registers);
 	first_memchunk.phys_addr = ve.reserved_mem - PAGE_OFFSET;
 	first_memchunk.size = ve.reserved_mem_size;
+        
+        VALGRIND_PRINTF("regs base addreess=%p\n", regs);
+        printf("regs base address=%p\n", regs);
+
+        AMMT_SET_REGS_BASE(regs);
 
 	ioctl(fd, IOCTL_ENGINE_REQ, 0);
 	ioctl(fd, IOCTL_ENABLE_VE, 0);

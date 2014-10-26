@@ -13,8 +13,9 @@ struct mp4_private_t;
 extern uint64_t get_time();
 
 //vol_sprite_usage / sprite_enable
-#define STATIC_SPRITE 1
-#define GMC_SPRITE 2
+#define NULL_SPRITE     0
+#define STATIC_SPRITE   1
+#define GMC_SPRITE      2
 
 // shapes
 #define RECT_SHAPE       0
@@ -80,10 +81,11 @@ typedef struct {
 
 typedef struct
 {
-	int vop_coding_type;
-	int intra_dc_vlc_thr;
-	int vop_quant;
-	int quantizer;
+    int vop_coding_type;
+    int last_coding_type;
+    int intra_dc_vlc_thr;
+    int vop_quant;
+    int quantizer;
     int fcode_forward;
     int fcode_backward;
 
@@ -92,10 +94,10 @@ typedef struct
     int mcbpc;
     int derived_mb_type;
     int cbpc;
- 	int ac_pred_flag;
-	int cbpy;
-	int dquant;
-	int cbp;
+    int ac_pred_flag;
+    int cbpy;
+    int dquant;
+    int cbp;
 
     int slice_height;
     int no_rounding;
@@ -110,13 +112,44 @@ typedef struct
     int msmpeg4_version;
     int bit_rate;
     int inter_intra_pred;
+    uint16_t sprite_traj[4][2];      ///< sprite trajectory points
+    int sprite_offset[2][2];         ///< sprite offset[isChroma][isMVY]
+    int sprite_delta[2][2];          ///< sprite_delta [isY][isMVY]
+    int sprite_shift[2];             ///< sprite shift [isChroma]
+    int sprite_ref[4][2];
+    int real_sprite_warping_points;
+    int sprite_offset_impr[2][2];
+    int sprite_delta_impr[2][2];
+    int sprite_shift_impr[2];
+    int virtual_ref[2][2];
+    int virtual_ref2[2][2];
+    int socx;
+    int socy;
+    int mv5_upper;
+    int mv5_lower;
+    int mv6_upper;
+    int mv6_lower;
+    int mask2;
+
+    int vop_reduced_resolution;
+    int vop_width;
+    int vop_height;
+    int vop_horizontal_mc_spatial_ref;
+    int vop_vertical_mc_spatial_ref;
+    int background_composition;
+    int change_conv_ratio_disable;
+    int vop_constant_alpha;
+    int vop_constant_alpha_value;
+    int top_field_first;
+    int alternate_vertical_scan_flag;
+    
 } vop_header_t;
 
 typedef struct
 {
-	void                        *mbh_buffer;
-	void                        *dcac_buffer;
-	void                        *ncf_buffer;
+    void                        *mbh_buffer;
+    void                        *dcac_buffer;
+    void                        *ncf_buffer;
 /*    vol_header_t                vol_hdr; */
     video_packet_header_t       pkt_hdr;
     VdpDecoderMpeg4VolHeader    mpeg4VolHdr;
