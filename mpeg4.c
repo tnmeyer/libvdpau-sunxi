@@ -27,20 +27,8 @@
 #include "stdlib.h"
 #include "mp4_vars.h"
 
-const uint16_t ff_sprite_trajectory_tab[15][2] = {
- {0x00, 2}, {0x02, 3},  {0x03, 3},  {0x04, 3}, {0x05, 3}, {0x06, 3},
- {0x0E, 4}, {0x1E, 5},  {0x3E, 6},  {0x7E, 7}, {0xFE, 8},
- {0x1FE, 9},{0x3FE, 10},{0x7FE, 11},{0xFFE, 12},
-};
-#define SPRITE_TRAJ_VLC_BITS 6
-typedef struct VLC {
-    int bits;
-    int16_t (*table)[2]; ///< code, bits
-    int table_size, table_allocated;
-    void * volatile init_state;
-} VLC;
-
-static VLC sprite_trajectory;
+static int mpeg4_calcResyncMarkerLength(mp4_private_t *decoder_p);
+uint32_t show_bits_aligned(bitstream *bs, int n, int aligned);
 
 static int find_startcode(bitstream *bs)
 {
@@ -63,53 +51,87 @@ static int find_startcode(bitstream *bs)
 
 uint32_t show_bits(bitstream *bs, int n)
 {
-	uint32_t bits = 0;
-	int remaining_bits = n;
+    return show_bits_aligned(bs, n, 0);
+
+#if 0
+    uint32_t bits = 0;
+    int remaining_bits = n;
     int save_bitpos = bs->bitpos;
-    
-	while (remaining_bits > 0)
-	{
-		int bits_in_current_byte = 8 - (bs->bitpos & 7);
 
-		int trash_bits = 0;
-		if (remaining_bits < bits_in_current_byte)
-			trash_bits = bits_in_current_byte - remaining_bits;
+    while (remaining_bits > 0)
+    {
+            int bits_in_current_byte = 8 - (bs->bitpos & 7);
 
-		int useful_bits = bits_in_current_byte - trash_bits;
+            int trash_bits = 0;
+            if (remaining_bits < bits_in_current_byte)
+                    trash_bits = bits_in_current_byte - remaining_bits;
 
-		bits = (bits << useful_bits) | (bs->data[bs->bitpos / 8] >> trash_bits);
+            int useful_bits = bits_in_current_byte - trash_bits;
 
-		remaining_bits -= useful_bits;
-		bs->bitpos += useful_bits;
-	}
+            bits = (bits << useful_bits) | (bs->data[bs->bitpos / 8] >> trash_bits);
+
+            remaining_bits -= useful_bits;
+            bs->bitpos += useful_bits;
+    }
 
     bs->bitpos = save_bitpos;
-    
-	return bits & ((1 << n) - 1);
+
+    return bits & ((1 << n) - 1);
+#endif
+}
+
+uint32_t show_bits_aligned(bitstream *bs, int n, int aligned)
+{
+    uint32_t bits = 0;
+    int remaining_bits = n;
+    int bitpos;
+
+    if(aligned)
+        bitpos = (bs->bitpos+7) & ~7;
+    else
+        bitpos = bs->bitpos;
+
+    while (remaining_bits > 0)
+    {
+        int bits_in_current_byte = 8 - (bs->bitpos & 7);
+
+        int trash_bits = 0;
+        if (remaining_bits < bits_in_current_byte)
+                trash_bits = bits_in_current_byte - remaining_bits;
+
+        int useful_bits = bits_in_current_byte - trash_bits;
+
+        bits = (bits << useful_bits) | (bs->data[bitpos / 8] >> trash_bits);
+
+        remaining_bits -= useful_bits;
+        bitpos += useful_bits;
+    }
+
+    return bits & ((1 << n) - 1);
 }
 
 uint32_t get_bits(bitstream *bs, int n)
 {
-	uint32_t bits = 0;
-	int remaining_bits = n;
+    uint32_t bits = 0;
+    int remaining_bits = n;
 
-	while (remaining_bits > 0)
-	{
-		int bits_in_current_byte = 8 - (bs->bitpos & 7);
+    while (remaining_bits > 0)
+    {
+            int bits_in_current_byte = 8 - (bs->bitpos & 7);
 
-		int trash_bits = 0;
-		if (remaining_bits < bits_in_current_byte)
-			trash_bits = bits_in_current_byte - remaining_bits;
+            int trash_bits = 0;
+            if (remaining_bits < bits_in_current_byte)
+                    trash_bits = bits_in_current_byte - remaining_bits;
 
-		int useful_bits = bits_in_current_byte - trash_bits;
+            int useful_bits = bits_in_current_byte - trash_bits;
 
-		bits = (bits << useful_bits) | (bs->data[bs->bitpos / 8] >> trash_bits);
+            bits = (bits << useful_bits) | (bs->data[bs->bitpos / 8] >> trash_bits);
 
-		remaining_bits -= useful_bits;
-		bs->bitpos += useful_bits;
-	}
+            remaining_bits -= useful_bits;
+            bs->bitpos += useful_bits;
+    }
 
-	return bits & ((1 << n) - 1);
+    return bits & ((1 << n) - 1);
 }
 
 int bytealign(bitstream *bs)
@@ -167,356 +189,6 @@ int decode012(bitstream *bs)
         return 0;
     else
         return get_bits(bs, 1) + 1;
-}
-
-inline int GET_VLC( bitstream *gb, int16_t (*table)[2], int bits, int max_depth)
-{
-    int n, nb_bits;
-    unsigned int index;
-    int code;
-
-    index = show_bits(gb, bits);
-    code  = table[index][0];
-    n     = table[index][1];
-
-    if (max_depth > 1 && n < 0) {
-        flush_bits(gb, bits);
-
-        nb_bits = -n;
-
-        index = show_bits(gb, nb_bits) + code;
-        code  = table[index][0];
-        n     = table[index][1];
-        if (max_depth > 2 && n < 0) {
-            flush_bits(gb, nb_bits);
-
-            nb_bits = -n;
-            index = show_bits(gb, nb_bits) + code;   
-            code  = table[index][0];
-            n     = table[index][1];
-        }
-    }
-    flush_bits(gb, n);
-    return code;
-}
-
-static inline int get_vlc2(bitstream *s, int16_t (*table)[2],
-                                     int bits, int max_depth)
-{
-    int code;
-
-    code = GET_VLC( s, table, bits, max_depth);
-
-    return code;
-}
-
-#ifndef NEG_USR32
-inline int NEG_USR32(a,s)
-{ 
-    return (((uint32_t)(a))>>(32-(s)));
-}
-#endif
-
-static inline int get_xbits(bitstream *s, int n)
-{
-    register int sign;
-    register int32_t cache;
-    cache = get_bits(s, n) << (32-n);
-    sign  = ~cache >> 31;
-    int temp1 = sign ^ cache;
-    int temp2 = NEG_USR32(temp1, n);
-    int temp3 = ( temp2 ^ sign); 
-    return temp3 - sign;
-}
-
-#define init_vlc(vlc, nb_bits, nb_codes,                \
-                 bits, bits_wrap, bits_size,            \
-                 codes, codes_wrap, codes_size,         \
-                 flags)                                 \
-    ff_init_vlc_sparse(vlc, nb_bits, nb_codes,          \
-                       bits, bits_wrap, bits_size,      \
-                       codes, codes_wrap, codes_size,   \
-                       NULL, 0, 0, flags)
-
-static int ff_init_vlc_sparse(VLC *vlc, int nb_bits, int nb_codes,
-                       const void *bits, int bits_wrap, int bits_size,
-                       const void *codes, int codes_wrap, int codes_size,
-                       const void *symbols, int symbols_wrap, int symbols_size,
-                       int flags);
-void ff_free_vlc(VLC *vlc);
-
-void *avpriv_atomic_ptr_cas(void * volatile *ptr, void *oldval, void *newval)
-{
-    if (*ptr == oldval) {
-        *ptr = newval;
-        return oldval;
-    }
-    return *ptr;
-}
-
-#define INIT_VLC_LE             2
-#define INIT_VLC_USE_NEW_STATIC 4
-
-#define INIT_VLC_STATIC(vlc, bits, a, b, c, d, e, f, g, static_size)       \
-    do {                                                                   \
-        static int16_t table[static_size][2];                             \
-        (vlc)->table           = table;                                    \
-        (vlc)->table_allocated = static_size;                              \
-        init_vlc(vlc, bits, a, b, c, d, e, f, g, INIT_VLC_USE_NEW_STATIC); \
-    } while (0)
-
-typedef struct {
-    uint8_t bits;
-    uint16_t symbol;
-    /** codeword, with the first bit-to-be-read in the msb
-     * (even if intended for a little-endian bitstream reader) */
-    uint32_t code;
-} VLCcode;
-
-const uint8_t ff_reverse[256] = {
-0x00,0x80,0x40,0xC0,0x20,0xA0,0x60,0xE0,0x10,0x90,0x50,0xD0,0x30,0xB0,0x70,0xF0,
-0x08,0x88,0x48,0xC8,0x28,0xA8,0x68,0xE8,0x18,0x98,0x58,0xD8,0x38,0xB8,0x78,0xF8,
-0x04,0x84,0x44,0xC4,0x24,0xA4,0x64,0xE4,0x14,0x94,0x54,0xD4,0x34,0xB4,0x74,0xF4,
-0x0C,0x8C,0x4C,0xCC,0x2C,0xAC,0x6C,0xEC,0x1C,0x9C,0x5C,0xDC,0x3C,0xBC,0x7C,0xFC,
-0x02,0x82,0x42,0xC2,0x22,0xA2,0x62,0xE2,0x12,0x92,0x52,0xD2,0x32,0xB2,0x72,0xF2,
-0x0A,0x8A,0x4A,0xCA,0x2A,0xAA,0x6A,0xEA,0x1A,0x9A,0x5A,0xDA,0x3A,0xBA,0x7A,0xFA,
-0x06,0x86,0x46,0xC6,0x26,0xA6,0x66,0xE6,0x16,0x96,0x56,0xD6,0x36,0xB6,0x76,0xF6,
-0x0E,0x8E,0x4E,0xCE,0x2E,0xAE,0x6E,0xEE,0x1E,0x9E,0x5E,0xDE,0x3E,0xBE,0x7E,0xFE,
-0x01,0x81,0x41,0xC1,0x21,0xA1,0x61,0xE1,0x11,0x91,0x51,0xD1,0x31,0xB1,0x71,0xF1,
-0x09,0x89,0x49,0xC9,0x29,0xA9,0x69,0xE9,0x19,0x99,0x59,0xD9,0x39,0xB9,0x79,0xF9,
-0x05,0x85,0x45,0xC5,0x25,0xA5,0x65,0xE5,0x15,0x95,0x55,0xD5,0x35,0xB5,0x75,0xF5,
-0x0D,0x8D,0x4D,0xCD,0x2D,0xAD,0x6D,0xED,0x1D,0x9D,0x5D,0xDD,0x3D,0xBD,0x7D,0xFD,
-0x03,0x83,0x43,0xC3,0x23,0xA3,0x63,0xE3,0x13,0x93,0x53,0xD3,0x33,0xB3,0x73,0xF3,
-0x0B,0x8B,0x4B,0xCB,0x2B,0xAB,0x6B,0xEB,0x1B,0x9B,0x5B,0xDB,0x3B,0xBB,0x7B,0xFB,
-0x07,0x87,0x47,0xC7,0x27,0xA7,0x67,0xE7,0x17,0x97,0x57,0xD7,0x37,0xB7,0x77,0xF7,
-0x0F,0x8F,0x4F,0xCF,0x2F,0xAF,0x6F,0xEF,0x1F,0x9F,0x5F,0xDF,0x3F,0xBF,0x7F,0xFF,
-};
-
-static int alloc_table(VLC *vlc, int size, int use_static)
-{
-    int index = vlc->table_size;
-
-    vlc->table_size += size;
-    if (vlc->table_size > vlc->table_allocated) {
-        if (use_static)
-            abort(); // cannot do anything, init_vlc() is used with too little memory
-        vlc->table_allocated += (1 << vlc->bits);
-        vlc->table = realloc(vlc->table, vlc->table_allocated * sizeof(int16_t) * 2);
-        if (!vlc->table)
-            return 12;
-    }
-    return index;
-}
-
-
-static uint32_t bitswap_32(uint32_t x)
-{
-    return (uint32_t)ff_reverse[ x        & 0xFF] << 24 |
-           (uint32_t)ff_reverse[(x >> 8)  & 0xFF] << 16 |
-           (uint32_t)ff_reverse[(x >> 16) & 0xFF] << 8  |
-           (uint32_t)ff_reverse[ x >> 24];
-}
-
-static int compare_vlcspec(const void *a, const void *b)
-{
-    const VLCcode *sa = a, *sb = b;
-    return (sa->code >> 1) - (sb->code >> 1);
-}
-/**
- * Build VLC decoding tables suitable for use with get_vlc().
- *
- * @param vlc            the context to be initted
- *
- * @param table_nb_bits  max length of vlc codes to store directly in this table
- *                       (Longer codes are delegated to subtables.)
- *
- * @param nb_codes       number of elements in codes[]
- *
- * @param codes          descriptions of the vlc codes
- *                       These must be ordered such that codes going into the same subtable are contiguous.
- *                       Sorting by VLCcode.code is sufficient, though not necessary.
- */
-static int build_table(VLC *vlc, int table_nb_bits, int nb_codes,
-                       VLCcode *codes, int flags)
-{
-    int table_size, table_index, index, code_prefix, symbol, subtable_bits;
-    int i, j, k, n, nb, inc;
-    uint32_t code;
-    int16_t (*table)[2];
-
-    table_size = 1 << table_nb_bits;
-    if (table_nb_bits > 30)
-       return -1;
-    table_index = alloc_table(vlc, table_size, flags & INIT_VLC_USE_NEW_STATIC);
-    //av_dlog(NULL, "new table index=%d size=%d\n", table_index, table_size);
-    if (table_index < 0)
-        return table_index;
-    table = &vlc->table[table_index];
-
-    for (i = 0; i < table_size; i++) {
-        table[i][1] = 0; //bits
-        table[i][0] = -1; //codes
-    }
-
-    /* first pass: map codes and compute auxiliary table sizes */
-    for (i = 0; i < nb_codes; i++) {
-        n      = codes[i].bits;
-        code   = codes[i].code;
-        symbol = codes[i].symbol;
-        //av_dlog(NULL, "i=%d n=%d code=0x%x\n", i, n, code);
-        if (n <= table_nb_bits) {
-            /* no need to add another table */
-            j = code >> (32 - table_nb_bits);
-            nb = 1 << (table_nb_bits - n);
-            inc = 1;
-            if (flags & INIT_VLC_LE) {
-                j = bitswap_32(code);
-                inc = 1 << n;
-            }
-            for (k = 0; k < nb; k++) {
-                //av_dlog(NULL, "%4x: code=%d n=%d\n", j, i, n);
-                if (table[j][1] /*bits*/ != 0) {
-                    //av_log(NULL, AV_LOG_ERROR, "incorrect codes\n");
-                    return 11;
-                }
-                table[j][1] = n; //bits
-                table[j][0] = symbol;
-                j += inc;
-            }
-        } else {
-            /* fill auxiliary table recursively */
-            n -= table_nb_bits;
-            code_prefix = code >> (32 - table_nb_bits);
-            subtable_bits = n;
-            codes[i].bits = n;
-            codes[i].code = code << table_nb_bits;
-            for (k = i+1; k < nb_codes; k++) {
-                n = codes[k].bits - table_nb_bits;
-                if (n <= 0)
-                    break;
-                code = codes[k].code;
-                if (code >> (32 - table_nb_bits) != code_prefix)
-                    break;
-                codes[k].bits = n;
-                codes[k].code = code << table_nb_bits;
-                subtable_bits = subtable_bits > n ? subtable_bits : n;
-            }
-            subtable_bits = subtable_bits < table_nb_bits ? subtable_bits : table_nb_bits;
-            j = (flags & INIT_VLC_LE) ? bitswap_32(code_prefix) >> (32 - table_nb_bits) : code_prefix;
-            table[j][1] = -subtable_bits;
-            //av_dlog(NULL, "%4x: n=%d (subtable)\n",
-            //        j, codes[i].bits + table_nb_bits);
-            index = build_table(vlc, subtable_bits, k-i, codes+i, flags);
-            if (index < 0)
-                return index;
-            /* note: realloc has been done, so reload tables */
-            table = &vlc->table[table_index];
-            table[j][0] = index; //code
-            i = k-1;
-        }
-    }
-    return table_index;
-}
-#define GET_DATA(v, table, i, wrap, size)                   \
-{                                                           \
-    const uint8_t *ptr = (const uint8_t *)table + i * wrap; \
-    switch(size) {                                          \
-    case 1:                                                 \
-        v = *(const uint8_t *)ptr;                          \
-        break;                                              \
-    case 2:                                                 \
-        v = *(const uint16_t *)ptr;                         \
-        break;                                              \
-    default:                                                \
-        v = *(const uint32_t *)ptr;                         \
-        break;                                              \
-    }                                                       \
-}
-
-
-static int ff_init_vlc_sparse(VLC *vlc, int nb_bits, int nb_codes,
-                       const void *bits, int bits_wrap, int bits_size,
-                       const void *codes, int codes_wrap, int codes_size,
-                       const void *symbols, int symbols_wrap, int symbols_size,
-                       int flags)
-{
-    VLCcode *buf;
-    int i, j, ret;
-    VLCcode localbuf[1500]; // the maximum currently needed is 1296 by rv34
-    void *state;
-
-    vlc->bits = nb_bits;
-    if (flags & INIT_VLC_USE_NEW_STATIC) {
-        while (state = avpriv_atomic_ptr_cas(&vlc->init_state, NULL, vlc)) {
-            if (state == vlc + 1) {
-                //av_assert0(vlc->table_size && vlc->table_size == vlc->table_allocated);
-                return 0;
-            }
-        }
-        //av_assert0(!vlc->table_size);
-        //av_assert0(nb_codes + 1 <= FF_ARRAY_ELEMS(localbuf));
-        buf = localbuf;
-    } else {
-        vlc->table           = NULL;
-        vlc->table_allocated = 0;
-        vlc->table_size      = 0;
-
-        buf = malloc((nb_codes + 1) * sizeof(VLCcode));
-        if (!buf)
-            return 10;
-    }
-
-
-    //av_assert0(symbols_size <= 2 || !symbols);
-    j = 0;
-#define COPY(condition)\
-    for (i = 0; i < nb_codes; i++) {                                        \
-        GET_DATA(buf[j].bits, bits, i, bits_wrap, bits_size);               \
-        if (!(condition))                                                   \
-            continue;                                                       \
-        if (buf[j].bits > 3*nb_bits || buf[j].bits>32) {                    \
-            if (!(flags & INIT_VLC_USE_NEW_STATIC))                         \
-                free(buf);                                               \
-            return -1;                                                      \
-        }                                                                   \
-        GET_DATA(buf[j].code, codes, i, codes_wrap, codes_size);            \
-        if (buf[j].code >= (1LL<<buf[j].bits)) {                            \
-            if (!(flags & INIT_VLC_USE_NEW_STATIC))                         \
-                free(buf);                                               \
-            return -1;                                                      \
-        }                                                                   \
-        if (flags & INIT_VLC_LE)                                            \
-            buf[j].code = bitswap_32(buf[j].code);                          \
-        else                                                                \
-            buf[j].code <<= 32 - buf[j].bits;                               \
-        if (symbols)                                                        \
-            GET_DATA(buf[j].symbol, symbols, i, symbols_wrap, symbols_size) \
-        else                                                                \
-            buf[j].symbol = i;                                              \
-        j++;                                                                \
-    }
-    COPY(buf[j].bits > nb_bits);
-    // qsort is the slowest part of init_vlc, and could probably be improved or avoided
-    qsort(buf, j, sizeof(VLCcode), compare_vlcspec);
-    COPY(buf[j].bits && buf[j].bits <= nb_bits);
-    nb_codes = j;
-
-    ret = build_table(vlc, nb_bits, nb_codes, buf, flags);
-
-    if (flags & INIT_VLC_USE_NEW_STATIC) {
-        //if(vlc->table_size != vlc->table_allocated)
-        //    av_log(NULL, AV_LOG_ERROR, "needed %d had %d\n", vlc->table_size, vlc->table_allocated);
-        state = avpriv_atomic_ptr_cas(&vlc->init_state, vlc, vlc+1);
-        //av_assert0(state == vlc);
-        //av_assert0(ret >= 0);
-    } else {
-        free(buf);
-        if (ret < 0) {
-            free(&vlc->table);
-            return ret;
-        }
-    }
-    return 0;
 }
 
 static void dumpData(char* data)
@@ -1057,7 +729,7 @@ static int macroblock(bitstream *bs, mp4_private_t *priv)
     return 1;
 }
 
-static inline long ROUNDED_DIV(a,b)
+static inline long ROUNDED_DIV(long a, long b)
 {
   return ((a)>0 ? (((a) + ((b)>>1))/(b)) : (((a) - ((b)>>1))/(b)));
 }
@@ -1081,42 +753,30 @@ int read_dmv_length(bitstream *gb)
     }
     else if( value == 3) 
     {
-        int i = 0;
+        int i = 3;
         value = 5;
-        while (i < 15)
+        while (value < 14)
         {
             int value2 = get_bits(gb, 1);
             if(value2 == 0)
                 break;
             value++;
         }
-        if(i == 15)
-            value = -1;
+        //if(i == 13)
+        //    value = -1;
     }
-    else
-    {
-        value = 0;
-    }
+
     return value;
 }
 int read_dmv_code (bitstream *gb, int length)
 {
-    int new_length = length;
-    int code=length;
+    int code=0;
 
-    if(length)
+    code = get_bits(gb, length);
+    int first_bit = (1 << (length-1));
+    if((code & first_bit) == 0)
     {
-        int code = get_bits(gb, 1);
-        new_length--;
-        int mask = 1 << new_length;
-        if(code == 0)
-        {
-            mask = (1 << length) >> 1;
-        }
-        if(new_length > 1)
-        {
-            code = get_bits(gb, length-1) + mask;
-        }
+        code = ((~(1 << length))+1) - ~code;
     }
     return code;
 }
@@ -1151,21 +811,21 @@ static int mpeg4_decode_sprite_trajectory(bitstream *gb, mp4_private_t *priv)
         int length;
         int x=0, y=0;
 
-        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
-//        length = read_dmv_length(gb);
+//        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
+        length = read_dmv_length(gb);
         if(length){
-            x= get_xbits(gb, length);
-//            x = read_dmv_code(gb, length);
+//            x= get_xbits(gb, length);
+            x = read_dmv_code(gb, length);
         }
         //if(!(s->divx_version==500 && s->divx_build==413)) skip_bits(gb,1); /* marker bit */
 	if (get_bits(gb, 1) != 1)
 		VDPAU_DBG("vop header marker error");
 
-        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
-//            length= read_dmv_length(gb);
+//        length= get_vlc2(gb, sprite_trajectory.table, SPRITE_TRAJ_VLC_BITS, 3);
+            length= read_dmv_length(gb);
         if(length){
-            y=get_xbits(gb, length);
-//            y=read_dmv_code(gb, length);
+//            y=get_xbits(gb, length);
+            y=read_dmv_code(gb, length);
         }
 	if (get_bits(gb, 1) != 1)
 		VDPAU_DBG("vop header marker error");
@@ -1331,9 +991,9 @@ static int mpeg4_decode_sprite_trajectory(bitstream *gb, mp4_private_t *priv)
 
     long long l_normalize_save = normalize_save;
     unsigned long long l_mask = l_normalize_save | l_mask2;
-    foo4 = r * foo4;
-    long long l_foo5 = foo4 * sprite_ref[0][0];
-    long long l_foo6 = foo4 * temp_v4_2_2;
+    l_foo4 = r * l_foo4;
+    long long l_foo5 = l_foo4 * sprite_ref[0][0];
+    long long l_foo6 = l_foo4 * temp_v4_2_2;
     long long sub_1 = l_foo5 - l_foo3;
     sub_1 += l_foo4;
     l_foo6 -= l_foo3;
@@ -1520,13 +1180,29 @@ static int mpeg4_decode_sprite_trajectory(bitstream *gb, mp4_private_t *priv)
 #endif
     return 0;
 }
+static int mpeg4_process_macroblock(bitstream *bs, decoder_ctx_t *decoder)
+{
+    mp4_private_t *priv = (mp4_private_t *)decoder->private;
+    vop_header_t *h = &priv->vop_header;
 
-static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info, mp4_private_t *priv)
+    int marker_length = mpeg4_calcResyncMarkerLength(priv);
+    int mba = 0;
+    int result;
+    do {
+        result = macroblock(bs, priv);
+        mba++;
+    } while(bits_left(bs) && (nextbits_bytealigned(bs, 23) != 0) &&
+            nextbits_bytealigned(bs, marker_length) != 1);
+    h->num_gop_mbas = mba;
+}
+
+static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info, decoder_ctx_t *decoder)
 {
     int dummy;
+    mp4_private_t *priv = (mp4_private_t *)decoder->private;
     vop_header_t *h = &priv->vop_header;
     VdpDecoderMpeg4VolHeader *vol = &priv->mpeg4VolHdr;
-    
+
 	h->vop_coding_type = get_bits(bs, 2);
 
 	// modulo_time_base
@@ -1634,8 +1310,23 @@ static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info
                     int vop_shape_coding_type = get_bits(bs, 1);
                 }
                 //motion_shape_texture()
+                //mpeg4_process_macroblock(bs, decoder);
                 //video_packet_header()
+		/*
+		bitstream bs_saved = *bs;
+		mp4_private_t _priv = *priv;
+		int marker_length = mpeg4_calcResyncMarkerLength(priv);
+		if(find_resynccode(bs, marker_length))
+                	mpeg4_decode_packet_header(bs, 
+                                        info,
+                                        decoder, 
+                                        &_priv);
+		priv->pkt_hdr.curr_mb_num = _priv.pkt_hdr.mb_num;
+
+		*bs = bs_saved;
+		*/
                 //motion_shape_texture()
+                //mpeg4_process_macroblock(bs, decoder);
             }
             else {
                 if(vol->enhancement_type) {
@@ -1672,15 +1363,17 @@ static int decode_vop_header(bitstream *bs, VdpPictureInfoMPEG4Part2 const *info
                 }
                 int ref_select_code = get_bits(bs, 2);
                 //combined_motion_shape_texture() 
+                //mpeg4_process_macroblock(bs, decoder);
             }
         }
         else {
+		printf("unimplemented leg\n");
             //combined_motion_shape_texture() 
         }
 	return 1;
 }
 #if 1
-static int mpeg4_decode_packet_header(bitstream *gb, VdpPictureInfoMPEG4Part2 const *info, decoder_ctx_t *decoder, mp4_private_t *priv)
+int mpeg4_decode_packet_header(bitstream *gb, VdpPictureInfoMPEG4Part2 const *info, decoder_ctx_t *decoder, mp4_private_t *priv)
 {
     video_packet_header_t *h = &priv->pkt_hdr;
     VdpDecoderMpeg4VolHeader *vol = &priv->mpeg4VolHdr;
@@ -1783,6 +1476,29 @@ static int mpeg4_decode_packet_header(bitstream *gb, VdpPictureInfoMPEG4Part2 co
 }
 #endif
 
+static int mpeg4_calcResyncMarkerLength(mp4_private_t *decoder_p)
+{
+    int marker_length = 0;
+
+    if(decoder_p->mpeg4VolHdr.video_object_layer_shape == BIN_SHAPE)
+        marker_length=17;
+    else {
+        if(decoder_p->vop_header.vop_coding_type == VOP_I)
+            marker_length = 17;
+        else if(decoder_p->vop_header.vop_coding_type == VOP_B) {
+            int fcode = ((decoder_p->vop_header.fcode_forward) > (decoder_p->vop_header.fcode_backward) ?  
+                (decoder_p->vop_header.fcode_forward) : (decoder_p->vop_header.fcode_backward));
+            marker_length=15+fcode < 17 ? 15+fcode : 17;
+            //add +1 for 1 bit
+            marker_length +=1;
+        }
+        else if(decoder_p->vop_header.vop_coding_type == VOP_P) {
+            marker_length = 15+decoder_p->vop_header.fcode_forward + 1;
+        }
+    }
+    return marker_length;
+}
+
 static unsigned long num_pics=0;
 static unsigned long num_longs=0;
 int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, const int len, video_surface_ctx_t *output)
@@ -1798,40 +1514,38 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
     decoder_p->pkt_hdr.mb_ypos = 0;
     uint32_t mba_reg = 0x0;
     static int vop_s_frame_seen = 0;
+    int last_mba = 0;
 
     if(!decoder_p->mpeg4VolHdrSet)
     {
         VDPAU_DBG("MPEG4 VOL Header must be set prior decoding of frames! Sorry");
         return VDP_STATUS_ERROR;
     }
-
+/*
+	if(info->resync_marker_disable)
+	{
+	        VDPAU_DBG("video without resync marker not supported! Sorry");
+        	return VDP_STATUS_ERROR;
+	}
+*/
 	int i;
 	void *ve_regs = ve_get_regs();
 	bitstream bs = { .data = decoder->data, .length = len, .bitpos = 0 };
     
 	while (find_startcode(&bs))
 	{
-        startcode = get_bits(&bs, 8);
-#if 0
-        if( startcode >= 0x20 && startcode <= 0x2f)
-        {
-            decode_vol_header(&bs, &decoder_p->vol_hdr);
-            continue;
-        }
-		else 
-#endif
-        if ( startcode != 0xb6)
-			continue;
+            startcode = get_bits(&bs, 8);
+            if ( startcode != 0xb6)
+                            continue;
 
-        //memset(&decoder_p->vop_header, 0, sizeof(decoder_p->vop_header));
-        //decoder_p->vop_header.fcode_forward = 1;
-        //decoder_p->vop_header.fcode_backward = 1;
-            if (!decode_vop_header(&bs, info, decoder_p))
+            if (!decode_vop_header(&bs, info, decoder))
                     continue;
 
+#if 0
             bitstream bs1 = bs;
             macroblock(&bs, decoder_p);
             bs=bs1;
+#endif
             // activate MPEG engine
             writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
             
@@ -1933,6 +1647,8 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             mp4mbaAddr_reg = 0;
             writel(mp4mbaAddr_reg, ve_regs + VE_MPEG_MBA);
 
+            int marker_length = mpeg4_calcResyncMarkerLength(decoder_p);
+
             while(more_mbs == 1) {
 
                 //workaround: currently it is unclear what the meaning of bit 20/21 is
@@ -1971,23 +1687,18 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 writel(vop_hdr, ve_regs + VE_MPEG_VOP_HDR);
 
                 decoder_p->vop_header.last_coding_type = decoder_p->vop_header.vop_coding_type;
-                
+
                 writel(decoder_p->vop_header.vop_quant, ve_regs + VE_MPEG_QP_INPUT);
-                
-                //mba_reg = readl(ve_regs + VE_MPEG_MBA);
-                //if(!info->resync_marker_disable)
-                //    mba_reg &= 0xff;    
-                //writel( readl(ve_regs + VE_MPEG_MBA) /* & 0xff */, ve_regs + VE_MPEG_MBA);
+
                 writel(mba_reg, ve_regs + VE_MPEG_MBA);
-                
+
                 //clean up everything
                 writel(0xffffffff, ve_regs + VE_MPEG_STATUS);
-                     
+
                 // set input offset in bits
                 writel(bs.bitpos, ve_regs + VE_MPEG_VLD_OFFSET);
 
                 // set input length in bits
-                //writel(((len*8 - bs.bitpos)), ve_regs + VE_MPEG_VLD_LEN);
                 writel(((len*8 - bs.bitpos)+31) & ~0x1f, ve_regs + VE_MPEG_VLD_LEN);
 
                 // input end
@@ -2029,7 +1740,27 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                     writel(mv6, ve_regs + VE_MPEG_MV6);
                 }
                 // trigger
-                int vbv_size = width * height;
+                bitstream bs_saved = bs;
+                int marker_length = mpeg4_calcResyncMarkerLength(decoder_p);
+                mp4_private_t _priv = *decoder_p;
+                if(find_resynccode(&bs, marker_length))
+                        mpeg4_decode_packet_header(&bs,
+                                        info,
+                                        decoder,
+                                        &_priv);
+                decoder_p->pkt_hdr.curr_mb_num = _priv.pkt_hdr.mb_num;
+                bs = bs_saved;
+
+                int num_mba = decoder_p->pkt_hdr.curr_mb_num; //height; //(mba_reg - last_mba);
+		if(num_mba == 0)
+			num_mba = height * width;
+                int vbv_size = num_mba - last_mba; // * width;
+		if(vbv_size == 0)
+		{
+			num_mba = height * width;
+			vbv_size = num_mba - last_mba;
+		}
+		last_mba = num_mba;
                 uint32_t mpeg_trigger = 0;
                 mpeg_trigger |= vbv_size << 8;
                 mpeg_trigger |= 0xd;
@@ -2067,26 +1798,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                     bs.bitpos = veCurPos / 8 * 8;
                     if(bytealign(&bs) == 0)
                     {
-                        int marker_length=0;
-                        
-                        if(decoder_p->mpeg4VolHdr.video_object_layer_shape == BIN_SHAPE)
-                           marker_length=17;
-                        else {
-                            if(decoder_p->vop_header.vop_coding_type == VOP_I)
-                                marker_length = 17;
-                            else if(decoder_p->vop_header.vop_coding_type == VOP_B) {
-                                int fcode = ((decoder_p->vop_header.fcode_forward) > (decoder_p->vop_header.fcode_backward) ?  
-                                    (decoder_p->vop_header.fcode_forward) : (decoder_p->vop_header.fcode_backward));
-                                marker_length=15+fcode < 17 ? 15+fcode : 17;
-                                //add +1 for 1 bit
-                                marker_length +=1;
-                            }
-                            else if(decoder_p->vop_header.vop_coding_type == VOP_P) {
-                                marker_length = 15+decoder_p->vop_header.fcode_forward + 1;
-                            }
-                        }
                         if(find_resynccode(&bs, marker_length)) {
-                            //get_bits(&bs, marker_length);
                             mpeg4_decode_packet_header(&bs, 
                                                  info,
                                                  decoder, 
@@ -2095,6 +1807,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                             bitstream bs1 = bs;
                             decoder_p->vop_header.quantizer = decoder_p->vop_header.vop_quant;
 
+/*
                             int mba=0;
                             int num_macroblock_in_gob = decoder_p->pkt_hdr.mb_width * 
                                             get_gob_height(decoder_p->mpeg4VolHdr.video_object_layer_height);
@@ -2104,7 +1817,9 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                             } while(bits_left(&bs) && (nextbits_bytealigned(&bs, 23) != 0) &&
                                     mba <= num_macroblock_in_gob);
                             bs = bs1;
+*/
                             more_mbs=1;
+                            //last_mba = mba_reg;
                             mba_reg = decoder_p->pkt_hdr.mb_y | (decoder_p->pkt_hdr.mb_x << 8);
                         }
                     }
@@ -2162,10 +1877,6 @@ VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder)
     decoder->setVideoControlData = mpeg4_setVideoControlData;
 
     save_tables(&decoder_p->tables);
-
-            INIT_VLC_STATIC(&sprite_trajectory, SPRITE_TRAJ_VLC_BITS, 15,
-                 &ff_sprite_trajectory_tab[0][1], 4, 2,
-                 &ff_sprite_trajectory_tab[0][0], 4, 2, 128);
 
 	return VDP_STATUS_OK;
 

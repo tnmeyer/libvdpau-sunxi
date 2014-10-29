@@ -77,6 +77,7 @@ typedef struct {
     int         mb_xpos;
     int         mb_ypos;
     int         mb_num;
+    int 	curr_mb_num;
 } video_packet_header_t;
 
 typedef struct
@@ -142,7 +143,7 @@ typedef struct
     int vop_constant_alpha_value;
     int top_field_first;
     int alternate_vertical_scan_flag;
-    
+    int num_gop_mbas;
 } vop_header_t;
 
 typedef struct
