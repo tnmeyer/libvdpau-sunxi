@@ -19,6 +19,7 @@
 
 #include "vdpau_private.h"
 #include "ve.h"
+#include <vdpau/vdpau_x11.h>
 
 VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device, VdpGetProcAddress **get_proc_address)
 {
@@ -33,6 +34,7 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 
 	//dev->display = XOpenDisplay(XDisplayString(display));
 	dev->screen = screen;
+        dev->fb_id = 0;
 
 	if (!ve_open())
 	{
@@ -168,7 +170,7 @@ VdpStatus vdp_get_proc_address(VdpDevice device_handle, VdpFuncId function_id, v
 		else
 			return VDP_STATUS_OK;
 	}
-	else if (function_id == VDP_FUNC_ID_BASE_WINSYS)
+	else if (function_id == VDP_FUNC_ID_PRESENTATION_QUEUE_TARGET_CREATE_X11)
 	{
 		*function_pointer = &vdp_presentation_queue_target_create_x11;
 

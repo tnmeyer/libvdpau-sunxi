@@ -1751,7 +1751,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 decoder_p->pkt_hdr.curr_mb_num = _priv.pkt_hdr.mb_num;
                 bs = bs_saved;
 
-                int num_mba = decoder_p->pkt_hdr.curr_mb_num; //height; //(mba_reg - last_mba);
+                int num_mba = decoder_p->pkt_hdr.curr_mb_num; 
 		if(num_mba == 0)
 			num_mba = height * width;
                 int vbv_size = num_mba - last_mba; // * width;
@@ -1762,9 +1762,10 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 		}
 		last_mba = num_mba;
                 uint32_t mpeg_trigger = 0;
+                uint32_t error_disable = 1;
                 mpeg_trigger |= vbv_size << 8;
                 mpeg_trigger |= 0xd;
-                mpeg_trigger |= (1 << 31);
+                mpeg_trigger |= (error_disable << 31);
                 mpeg_trigger |= (0x4000000);
                 writel(mpeg_trigger, ve_regs + VE_MPEG_TRIGGER);
 

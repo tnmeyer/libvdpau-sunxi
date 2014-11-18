@@ -116,4 +116,21 @@ static inline uint32_t readl(void *addr)
 #define VE_SRAM_H264_REF_LIST1		0x664
 #define VE_SRAM_H264_SCALING_LISTS	0x800
 
+#define VE_MPEG_TRIG_FORMAT                     24
+#define VE_MPEG_TRIG_FORMAT_SIZE                0x7
+#define VE_MPEG_TRIG_FORMAT_RESERVED            0x0
+
+#define VE_MPEG_TRIG_COLOR_FORMAT               27
+#define VE_MPEG_TRIG_COLOR_FORMAT_SIZE          0x7
+#define VE_MPEG_TRIG_COLOR_FORMAT_YUV_4_2_0     0x0
+#define VE_MPEG_TRIG_COLOR_FORMAT_YUV_4_1_1     0x1
+#define VE_MPEG_TRIG_COLOR_FORMAT_YUV_4_2_2_HOR 0x2
+#define VE_MPEG_TRIG_COLOR_FORMAT_YUV_4_4_4     0x3
+#define VE_MPEG_TRIG_COLOR_FORMAT_YUV_4_2_2_VER 0x4
+
+#define VE_MPEG_TRIG_ERROR_DISABLE_BIT  31
+#define VE_MPEG_TRIG_ERROR_DISABLE_SIZE  0x1
+
+#define VE_MPEG_TRIG_ERROR_DISABLE(er_dis)      ((err_dis & VE_MPEG_TRIG_ERROR_DISABLE_SIZE) << VE_MPEG_TRIG_ERROR_DISABLE_BIT)
+
 #endif

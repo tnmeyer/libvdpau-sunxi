@@ -32,11 +32,14 @@
 
 typedef struct
 {
-	Display *display;
-	int screen;
-	VdpPreemptionCallback *preemption_callback;
-	void *preemption_callback_context;
-	int fd;
+    Display *display;
+    int screen;
+    VdpPreemptionCallback *preemption_callback;
+    void *preemption_callback_context;
+    int fd_disp;
+    int fb_fd;
+    int fb_layer_id;
+    int fb_id;
 } device_ctx_t;
 
 typedef struct video_surface_ctx_struct
@@ -67,9 +70,11 @@ typedef struct decoder_ctx_struct
 
 typedef struct
 {
-	Drawable drawable;
-	int fd;
-	int layer;
+    Drawable drawable;
+    int fd;
+    int layer;
+    int screen_height;
+    int screen_width;
 } queue_target_ctx_t;
 
 typedef struct

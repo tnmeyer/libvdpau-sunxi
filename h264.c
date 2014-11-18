@@ -208,11 +208,14 @@ static void ref_pic_list_modification(h264_context_t *c)
 
 					for (j = h->num_ref_idx_l0_active_minus1 + 1; j > refIdxL0; j--)
 						h->RefPicList0[j] = h->RefPicList0[j - 1];
-					h->RefPicList0[refIdxL0++] = &c->ref_frames[i];
+                                        //prevent overrun of array
+					h->RefPicList0[(refIdxL0++ & 0x1F)] = &c->ref_frames[i];
 					i = refIdxL0;
 					for (j = refIdxL0; j <= h->num_ref_idx_l0_active_minus1 + 1; j++)
 						if (h->RefPicList0[j] && h->RefPicList0[j]->frame_idx != picNumL0)
-							h->RefPicList0[i++] = h->RefPicList0[j];
+                                                {
+							h->RefPicList0[(i++ & 0x1F)] = h->RefPicList0[j];
+                                                }
 				}
 				else if (modification_of_pic_nums_idc == 2)
 				{
