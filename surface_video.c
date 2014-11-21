@@ -33,7 +33,7 @@ VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, 
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	video_surface_ctx_t *vs = calloc(1, sizeof(video_surface_ctx_t));
+	video_surface_ctx_t *vs = handle_create(sizeof(*vs), surface);
 	if (!vs)
 		return VDP_STATUS_RESOURCES;
 
@@ -62,19 +62,9 @@ VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, 
 
 	if (!(vs->data))
 	{
-		free(vs);
+		handle_destroy(*surface);
 		return VDP_STATUS_RESOURCES;
 	}
-
-	int handle = handle_create(vs);
-	if (handle == -1)
-	{
-		ve_free(vs->data);
-		free(vs);
-		return VDP_STATUS_RESOURCES;
-	}
-
-	*surface = handle;
 
 	return VDP_STATUS_OK;
 }
@@ -90,7 +80,6 @@ VdpStatus vdp_video_surface_destroy(VdpVideoSurface surface)
 	ve_free(vs->data);
 
 	handle_destroy(surface);
-	free(vs);
 
 	return VDP_STATUS_OK;
 }

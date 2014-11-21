@@ -31,7 +31,7 @@ VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	output_surface_ctx_t *out = calloc(1, sizeof(output_surface_ctx_t));
+	output_surface_ctx_t *out = handle_create(sizeof(*out), surface);
 	if (!out)
 		return VDP_STATUS_RESOURCES;
 
@@ -41,15 +41,6 @@ VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	out->contrast = 1.0;
 	out->saturation = 1.0;
 	out->device = dev;
-
-	int handle = handle_create(out);
-	if (handle == -1)
-	{
-		free(out);
-		return VDP_STATUS_RESOURCES;
-	}
-
-	*surface = handle;
 
 	return VDP_STATUS_OK;
 }
@@ -61,7 +52,6 @@ VdpStatus vdp_output_surface_destroy(VdpOutputSurface surface)
 		return VDP_STATUS_INVALID_HANDLE;
 
 	handle_destroy(surface);
-	free(out);
 
 	return VDP_STATUS_OK;
 }

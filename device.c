@@ -20,6 +20,10 @@
 #include "vdpau_private.h"
 #include "ve.h"
 #include <vdpau/vdpau_x11.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device, VdpGetProcAddress **get_proc_address)
 {
@@ -28,7 +32,7 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 		return VDP_STATUS_INVALID_POINTER;
 	}
 
-	device_ctx_t *dev = calloc(1, sizeof(device_ctx_t));
+	device_ctx_t *dev = handle_create(sizeof(*dev), device);
 	if (!dev)
 		return VDP_STATUS_RESOURCES;
 
@@ -39,18 +43,20 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 	if (!ve_open())
 	{
 		VDPAU_DBG_ONCE("ve_open failed");
-		free(dev);
+		handle_destroy(*device);
 		return VDP_STATUS_ERROR;
 	}
 
-	int handle = handle_create(dev);
-	if (handle == -1)
+	char *env_vdpau_osd = getenv("VDPAU_OSD");
+	if (env_vdpau_osd && strncmp(env_vdpau_osd, "1", 1) == 0)
 	{
-		free(dev);
-		return VDP_STATUS_RESOURCES;
+		dev->g2d_fd = open("/dev/g2d", O_RDWR);
+		if (dev->g2d_fd != -1)
+			dev->osd_enabled = 1;
+		else
+			VDPAU_DBG("Failed to open /dev/g2d! OSD disabled.");
 	}
 
-	*device = handle;
 	*get_proc_address = &vdp_get_proc_address;
 
 	return VDP_STATUS_OK;
@@ -66,7 +72,6 @@ VdpStatus vdp_device_destroy(VdpDevice device)
 	//XCloseDisplay(dev->display);
 
 	handle_destroy(device);
-	free(dev);
 
 	return VDP_STATUS_OK;
 }

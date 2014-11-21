@@ -21,20 +21,35 @@
 
 VdpStatus vdp_bitmap_surface_create(VdpDevice device, VdpRGBAFormat rgba_format, uint32_t width, uint32_t height, VdpBool frequently_accessed, VdpBitmapSurface *surface)
 {
+#if 0
 	device_ctx_t *dev = handle_get(device);
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
+	bitmap_surface_ctx_t *out = handle_create(sizeof(*out), surface);
+	if (!out)
+		return VDP_STATUS_RESOURCES;
 
+	out->frequently_accessed = frequently_accessed;
 
+	ret = rgba_create(&out->rgba, dev, width, height, rgba_format);
+	if (ret != VDP_STATUS_OK)
+	{
+		handle_destroy(*surface);
+		return ret;
+	}
+
+	return VDP_STATUS_OK;
+#else
 	return VDP_STATUS_ERROR;
+#endif
 }
 
 VdpStatus vdp_bitmap_surface_destroy(VdpBitmapSurface surface)
 {
+	handle_destroy(surface);
 
-
-	return VDP_STATUS_ERROR;
+	return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_bitmap_surface_get_parameters(VdpBitmapSurface surface, VdpRGBAFormat *rgba_format, uint32_t *width, uint32_t *height, VdpBool *frequently_accessed)

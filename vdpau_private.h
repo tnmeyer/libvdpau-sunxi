@@ -40,6 +40,8 @@ typedef struct
     int fb_fd;
     int fb_layer_id;
     int fb_id;
+    int g2d_fd;
+    int osd_enabled;
 } device_ctx_t;
 
 typedef struct video_surface_ctx_struct
@@ -126,9 +128,11 @@ VdpStatus new_decoder_h264(decoder_ctx_t *decoder);
 VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder);
 VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder);
 
-int handle_create(void *data);
-void *handle_get(int handle);
-void handle_destroy(int handle);
+typedef uint32_t VdpHandle;
+
+void *handle_create(size_t size, VdpHandle *handle);
+void *handle_get(VdpHandle handle);
+void handle_destroy(VdpHandle handle);
 
 VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device, VdpGetProcAddress **get_proc_address);
 VdpStatus vdp_device_destroy(VdpDevice device);

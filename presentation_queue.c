@@ -47,7 +47,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     if (!dev)
         return VDP_STATUS_INVALID_HANDLE;
 
-    queue_target_ctx_t *qt = calloc(1, sizeof(queue_target_ctx_t));
+    queue_target_ctx_t *qt = handle_create(sizeof(*qt), target);
     if (!qt)
         return VDP_STATUS_RESOURCES;
 
@@ -55,7 +55,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     qt->fd = open("/dev/disp", O_RDWR);
     if (qt->fd == -1)
     {
-        free(qt);
+        handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
 
@@ -63,7 +63,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     if (dev->fb_fd == -1)
     {
         close(qt->fd);
-        free(qt);
+        handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
 
@@ -72,7 +72,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
         close(qt->fd);
         close(dev->fb_fd);
-        free(qt);
+        handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
 
@@ -80,7 +80,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
         close(qt->fd);
         close(dev->fb_fd);
-        free(qt);
+        handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
     uint32_t args[4] = { 0, DISP_LAYER_WORK_MODE_SCALER, 0, 0 };
@@ -89,7 +89,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
             close(qt->fd);
             close(dev->fb_fd);
-            free(qt);
+            handle_destroy(*target);
             return VDP_STATUS_RESOURCES;
     }
 
@@ -109,13 +109,6 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     args[0] = dev->fb_id;
     args[1] = (unsigned long)(&ck);
     ioctl(qt->fd, DISP_CMD_SET_COLORKEY, args);
-
-    int handle = handle_create(qt);
-    if (handle == -1)
-    {
-            free(qt);
-            return VDP_STATUS_RESOURCES;
-    }
 
     tmp[0] = dev->fb_id;
     int ret;
@@ -208,7 +201,6 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
             printf("layer bottom 1 failed\n");
     }
 
-    *target = handle;
     return VDP_STATUS_OK;
 }
 
@@ -225,7 +217,6 @@ VdpStatus vdp_presentation_queue_target_destroy(VdpPresentationQueueTarget prese
 	close(qt->fd);
 
 	handle_destroy(presentation_queue_target);
-	free(qt);
 
 	return VDP_STATUS_OK;
 }
@@ -243,21 +234,13 @@ VdpStatus vdp_presentation_queue_create(VdpDevice device, VdpPresentationQueueTa
 	if (!qt)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	queue_ctx_t *q = calloc(1, sizeof(queue_ctx_t));
+	queue_ctx_t *q = handle_create(sizeof(*q), presentation_queue);
 	if (!q)
 		return VDP_STATUS_RESOURCES;
 
 	q->target = qt;
 	q->device = dev;
 
-	int handle = handle_create(q);
-	if (handle == -1)
-	{
-		free(q);
-		return VDP_STATUS_RESOURCES;
-	}
-
-	*presentation_queue = handle;
 	return VDP_STATUS_OK;
 }
 
@@ -268,7 +251,6 @@ VdpStatus vdp_presentation_queue_destroy(VdpPresentationQueue presentation_queue
 		return VDP_STATUS_INVALID_HANDLE;
 
 	handle_destroy(presentation_queue);
-	free(q);
 
 	return VDP_STATUS_OK;
 }
