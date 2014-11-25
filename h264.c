@@ -583,7 +583,6 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 	VdpPictureInfoH264 const *info = (VdpPictureInfoH264 const *)_info;
 
 	h264_context_t *c = calloc(1, sizeof(h264_context_t));
-	c->regs = ve_get_regs();
 	c->picture_width_in_mbs_minus1 = (decoder->width - 1) / 16;
 	c->picture_height_in_mbs_minus1 = (decoder->height - 1) / 16;
 	c->info = info;
@@ -662,6 +661,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 		if (h->nal_unit_type != 5 && h->nal_unit_type != 1)
 		{
 			free(c);
+			ve_put();
 			return VDP_STATUS_ERROR;
 		}
 
