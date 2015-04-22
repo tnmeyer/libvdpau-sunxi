@@ -315,7 +315,8 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
             //check change in picture height/width
     }
     // activate MPEG engine
-    writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
+    //writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
+    ve_regs = ve_get(VE_ENGINE_MPEG, 0);
             
     #if 0
             // set quantisation tables
@@ -523,7 +524,8 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
     }
     writel(readl(ve_regs + VE_MPEG_CTRL) | 0x7C, ve_regs + VE_MPEG_CTRL);            
     // stop MPEG engine
-    writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x7, ve_regs + VE_CTRL);
+    //writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x7, ve_regs + VE_CTRL);
+    ve_put();
 
     if (error)
 	return VDP_STATUS_ERROR;

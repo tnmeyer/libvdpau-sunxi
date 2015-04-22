@@ -29,17 +29,18 @@ static struct
 	void **data;
 	size_t size;
 	pthread_rwlock_t lock;
-} ht = { .lock = PTHREAD_RWLOCK_INITIALIZER };
+} ht = { .lock = PTHREAD_RWLOCK_INITIALIZER,
+         .size = 0,
+         .data = NULL };
 
 void *handle_create(size_t size, VdpHandle *handle)
 {
-	*handle = VDP_INVALID_HANDLE;
+   unsigned int index;
+   void *data = NULL;
+   *handle = VDP_INVALID_HANDLE;
 
 	if (pthread_rwlock_wrlock(&ht.lock))
 		return NULL;
-
-	unsigned int index;
-	void *data = NULL;
 
 	for (index = 0; index < ht.size; index++)
 		if (ht.data[index] == NULL)
@@ -71,16 +72,15 @@ out:
 
 void *handle_get(VdpHandle handle)
 {
-	if (handle == VDP_INVALID_HANDLE)
+   unsigned int index = handle - 1;
+   void *data = NULL;
+      if (handle == VDP_INVALID_HANDLE)
 		return NULL;
 
 	if (pthread_rwlock_rdlock(&ht.lock))
 		return NULL;
 
-	unsigned int index = handle - 1;
-	void *data = NULL;
-
-	if (index < ht.size)
+        if (index >= 0 && index < ht.size)
 		data = ht.data[index];
 
 	pthread_rwlock_unlock(&ht.lock);
@@ -89,16 +89,28 @@ void *handle_get(VdpHandle handle)
 
 void handle_destroy(VdpHandle handle)
 {
-	if (pthread_rwlock_wrlock(&ht.lock))
+   unsigned int index = handle - 1;
+   if (pthread_rwlock_wrlock(&ht.lock))
 		return;
 
-	unsigned int index = handle - 1;
 
-	if (index < ht.size)
+	if (index >= 0 && index < ht.size)
 	{
-		free(ht.data[index]);
+#if 1	
+           free(ht.data[index]);
+#endif
 		ht.data[index] = NULL;
 	}
 
 	pthread_rwlock_unlock(&ht.lock);
 }
+void handles_print()
+{
+	int i;
+	for(i=0; i < ht.size; ++i)
+	{
+		printf("handle %d=%X\n", i+1, ht.data[i]);
+	}
+
+}
+

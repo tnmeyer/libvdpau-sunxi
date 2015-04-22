@@ -24,7 +24,6 @@
 
 VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32_t width, uint32_t height, uint32_t max_references, VdpDecoder *decoder)
 {
-    printf("vdpau decoder created\n");
     device_ctx_t *dev = handle_get(device);
     if (!dev)
         return VDP_STATUS_INVALID_HANDLE;
@@ -36,6 +35,7 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
     if (!dec)
         goto err_ctx;
 
+    printf("vdpau decoder=%d created\n", *decoder);
     memset(dec, 0, sizeof(*dec));
     dec->device = dev;
     dec->profile = profile;
@@ -100,6 +100,7 @@ err_ctx:
 
 VdpStatus vdp_decoder_destroy(VdpDecoder decoder)
 {
+    printf("vdpau decoder=%d destroyed\n", decoder);
     decoder_ctx_t *dec = handle_get(decoder);
     if (!dec)
         return VDP_STATUS_INVALID_HANDLE;

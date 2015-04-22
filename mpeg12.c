@@ -141,7 +141,7 @@ uint64_t tv, tv2;
 	tv = get_time();
 	ve_wait(1);
 	tv2 = get_time();
-	if (tv2-tv > 1000000) {
+	if (tv2-tv > 10000000) {
 		printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
 		}
 	

@@ -28,6 +28,7 @@ int ve_get_version(void);
 int ve_wait(int timeout);
 void *ve_get(int engine, uint32_t flags);
 void ve_put(void);
+void* ve_get_regs();
 
 void *ve_malloc(int size);
 void ve_free(void *ptr);

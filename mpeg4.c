@@ -27,6 +27,8 @@
 #include "stdlib.h"
 #include "mp4_vars.h"
 
+#define TIMEMEAS 1
+
 static int mpeg4_calcResyncMarkerLength(mp4_private_t *decoder_p);
 uint32_t show_bits_aligned(bitstream *bs, int n, int aligned);
 
@@ -1516,11 +1518,13 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
     static int vop_s_frame_seen = 0;
     int last_mba = 0;
 
+#if 1
     if(!decoder_p->mpeg4VolHdrSet)
     {
         VDPAU_DBG("MPEG4 VOL Header must be set prior decoding of frames! Sorry");
         return VDP_STATUS_ERROR;
     }
+#endif
 /*
 	if(info->resync_marker_disable)
 	{
@@ -1546,6 +1550,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             macroblock(&bs, decoder_p);
             bs=bs1;
 #endif
+            ve_regs = ve_get(VE_ENGINE_MPEG, 0);
             // activate MPEG engine
             writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
             
@@ -1561,14 +1566,20 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             if (info->forward_reference != VDP_INVALID_HANDLE)
             {
                 video_surface_ctx_t *forward = handle_get(info->forward_reference);
-                writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
-                writel(ve_virt2phys(forward->data + forward->plane_size), ve_regs + VE_MPEG_FWD_CHROMA);
+                if(forward)
+                {
+                   writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
+                   writel(ve_virt2phys(forward->data + forward->plane_size), ve_regs + VE_MPEG_FWD_CHROMA);
+                }
             }
             if (info->backward_reference != VDP_INVALID_HANDLE)
             {
                 video_surface_ctx_t *backward = handle_get(info->backward_reference);
-                writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
-                writel(ve_virt2phys(backward->data + backward->plane_size), ve_regs + VE_MPEG_BACK_CHROMA);
+                if(backward)
+                {
+                   writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
+                   writel(ve_virt2phys(backward->data + backward->plane_size), ve_regs + VE_MPEG_BACK_CHROMA);
+                }
             }
             else
             {
@@ -1829,6 +1840,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             }
             // stop MPEG engine
             writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x7, ve_regs + VE_CTRL);
+            ve_put();
     	}
 	return VDP_STATUS_OK;
 }

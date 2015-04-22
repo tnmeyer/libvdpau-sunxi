@@ -23,50 +23,53 @@
 
 VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, uint32_t width, uint32_t height, VdpVideoSurface *surface)
 {
-	if (!surface)
-		return VDP_STATUS_INVALID_POINTER;
+   if (!surface)
+      return VDP_STATUS_INVALID_POINTER;
+   
+   if (!width || !height)
+      return VDP_STATUS_INVALID_SIZE;
+   
+   device_ctx_t *dev = handle_get(device);
+   if (!dev)
+      return VDP_STATUS_INVALID_HANDLE;
+   
+   video_surface_ctx_t *vs = handle_create(sizeof(*vs), surface);
+   if (!vs)
+      return VDP_STATUS_RESOURCES;
+   
+   printf("vdpau video surface=%d created\n", *surface);
+   vs->device = dev;
+   vs->width = width;
+   vs->height = height;
+   vs->chroma_type = chroma_type;
+   
+   vs->plane_size = ((width + 63) & ~63) * ((height + 63) & ~63);
+   
+   switch (chroma_type)
+   {
+   case VDP_CHROMA_TYPE_444:
+      vs->data = ve_malloc(vs->plane_size * 3);
+      break;
+   case VDP_CHROMA_TYPE_422:
+      vs->data = ve_malloc(vs->plane_size * 2);
+      break;
+   case VDP_CHROMA_TYPE_420:
+      vs->data = ve_malloc(vs->plane_size + (vs->plane_size / 2));
+      break;
+   default:
+      free(vs);
+      return VDP_STATUS_INVALID_CHROMA_TYPE;
+   }
+   
+   if (!(vs->data))
+   {
+      printf("vdpau video surface=%d create, failure\n", *surface);
 
-	if (!width || !height)
-		return VDP_STATUS_INVALID_SIZE;
-
-	device_ctx_t *dev = handle_get(device);
-	if (!dev)
-		return VDP_STATUS_INVALID_HANDLE;
-
-	video_surface_ctx_t *vs = handle_create(sizeof(*vs), surface);
-	if (!vs)
-		return VDP_STATUS_RESOURCES;
-
-	vs->device = dev;
-	vs->width = width;
-	vs->height = height;
-	vs->chroma_type = chroma_type;
-
-	vs->plane_size = ((width + 63) & ~63) * ((height + 63) & ~63);
-
-	switch (chroma_type)
-	{
-	case VDP_CHROMA_TYPE_444:
-		vs->data = ve_malloc(vs->plane_size * 3);
-		break;
-	case VDP_CHROMA_TYPE_422:
-		vs->data = ve_malloc(vs->plane_size * 2);
-		break;
-	case VDP_CHROMA_TYPE_420:
-		vs->data = ve_malloc(vs->plane_size + (vs->plane_size / 2));
-		break;
-	default:
-		free(vs);
-		return VDP_STATUS_INVALID_CHROMA_TYPE;
-	}
-
-	if (!(vs->data))
-	{
-		handle_destroy(*surface);
-		return VDP_STATUS_RESOURCES;
-	}
-
-	return VDP_STATUS_OK;
+      handle_destroy(*surface);
+      return VDP_STATUS_RESOURCES;
+   }
+   
+   return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_video_surface_destroy(VdpVideoSurface surface)
@@ -79,7 +82,8 @@ VdpStatus vdp_video_surface_destroy(VdpVideoSurface surface)
 		vs->decoder_private_free(vs);
 	ve_free(vs->data);
 
-	handle_destroy(surface);
+        printf("vdpau video surface=%d destroyed\n", surface);
+        handle_destroy(surface);
 
 	return VDP_STATUS_OK;
 }

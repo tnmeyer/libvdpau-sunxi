@@ -106,8 +106,8 @@ int ve_open(void)
 	if (ve.regs == MAP_FAILED)
 		goto err;
 
-	ve.first_memchunk.phys_addr = ve.reserved_mem - PAGE_OFFSET;
-	ve.first_memchunk.size = ve.reserved_mem_size;
+	ve.first_memchunk.phys_addr = info.reserved_mem - PAGE_OFFSET;
+	ve.first_memchunk.size = info.reserved_mem_size;
         
         VALGRIND_PRINTF("regs base addreess=%p\n", ve.regs);
         printf("regs base address=%p\n", ve.regs);
@@ -174,6 +174,11 @@ void ve_put(void)
 {
 	writel(0x00130007, ve.regs + VE_CTRL);
 	pthread_mutex_unlock(&ve.device_lock);
+}
+
+void* ve_get_regs()
+{
+	return ve.regs;
 }
 
 void *ve_malloc(int size)

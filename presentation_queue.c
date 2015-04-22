@@ -83,7 +83,19 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
         handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
-    uint32_t args[4] = { 0, DISP_LAYER_WORK_MODE_SCALER, 0, 0 };
+    uint32_t args[4]; 
+    int i;
+    for (i = 0x65; i <= 0x67; i++)
+    {
+    //release possibly lost allocated layers
+       args[0] = dev->fb_id;
+       args[1] = i;
+       args[2] = 0;
+       args[3] = 0;
+       ioctl(qt->fd, DISP_CMD_LAYER_RELEASE, &args[0]);
+    }
+
+    args[1] = DISP_LAYER_WORK_MODE_SCALER;
     qt->layer = ioctl(qt->fd, DISP_CMD_LAYER_REQUEST, args);
     if (qt->layer == 0)
     {
@@ -146,6 +158,29 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
             printf("layer ck on failed\n");
     }
 #endif
+    args[0] = dev->fb_id;
+    args[1] = (unsigned long)(&ck);
+    args[2] = 0;
+    args[3] = 0;
+    ioctl(qt->fd, DISP_CMD_SET_BKCOLOR, args);
+    
+    tmp[0] = dev->fb_id;
+    tmp[1] = qt->layer;
+    if (ioctl(qt->fd, DISP_CMD_LAYER_TOP, &tmp) < 0)
+    {
+        printf("layer bottom 2 failed\n");
+    }
+#if 0
+    // but should be 1 when layering is fixed again.
+    /* Set the overlay layer below the screen layer */
+    tmp[0] = dev->fb_id;
+    tmp[1] = dev->fb_layer_id;
+    if (ioctl(qt->fd, DISP_CMD_LAYER_TOP, &tmp) < 0)
+    {
+        printf("layer bottom 1 failed\n");
+    }
+#endif
+
 #if 1
     /* Disable color key and enable global alpha for the screen layer */
     tmp[0] = dev->fb_id;
@@ -181,25 +216,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     }
 #endif
 #endif
-    args[0] = dev->fb_id;
-    args[1] = (unsigned long)(&ck);
-    args[2] = 0;
-    args[3] = 0;
-    ioctl(qt->fd, DISP_CMD_SET_BKCOLOR, args);
-
-    tmp[0] = dev->fb_id;
-    tmp[1] = qt->layer;
-    if (ioctl(qt->fd, DISP_CMD_LAYER_TOP, &tmp) < 0)
-    {
-            printf("layer bottom 2 failed\n");
-    }
-    /* Set the overlay layer below the screen layer */
-    tmp[0] = dev->fb_id;
-    tmp[1] = dev->fb_layer_id;
-    if (ioctl(qt->fd, DISP_CMD_LAYER_TOP, &tmp) < 0)
-    {
-            printf("layer bottom 1 failed\n");
-    }
+    printf("vdpau presentation target queue=%d created\n", *target);
 
     return VDP_STATUS_OK;
 }
@@ -218,7 +235,8 @@ VdpStatus vdp_presentation_queue_target_destroy(VdpPresentationQueueTarget prese
 
 	handle_destroy(presentation_queue_target);
 
-	return VDP_STATUS_OK;
+        printf("vdpau presentation target queue=%d destroyed\n", presentation_queue_target);
+        return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_presentation_queue_create(VdpDevice device, VdpPresentationQueueTarget presentation_queue_target, VdpPresentationQueue *presentation_queue)
@@ -241,7 +259,9 @@ VdpStatus vdp_presentation_queue_create(VdpDevice device, VdpPresentationQueueTa
 	q->target = qt;
 	q->device = dev;
 
-	return VDP_STATUS_OK;
+        printf("vdpau presentation queue=%d created\n", *presentation_queue);
+
+        return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_presentation_queue_destroy(VdpPresentationQueue presentation_queue)
@@ -252,7 +272,8 @@ VdpStatus vdp_presentation_queue_destroy(VdpPresentationQueue presentation_queue
 
 	handle_destroy(presentation_queue);
 
-	return VDP_STATUS_OK;
+        printf("vdpau presentation queue=%d destroyed\n", presentation_queue);
+        return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_presentation_queue_set_background_color(VdpPresentationQueue presentation_queue, VdpColor *const background_color)
@@ -313,12 +334,15 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 
 	if (!(os->vs))
 	{
+		printf("trying to display empty surface\n");
 		VDPAU_DBG("trying to display empty surface");
 		return VDP_STATUS_OK;
 	}
 
 	if (earliest_presentation_time != 0)
 		VDPAU_DBG_ONCE("Presentation time not supported");
+
+	//printf("%s: p_q=%d,o_s=%d\n", __FUNCTION__, presentation_queue, surface);
 
 	Window c;
 	int x=0,y=0;
