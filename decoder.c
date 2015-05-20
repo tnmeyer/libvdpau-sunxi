@@ -43,7 +43,7 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
     dec->height = height;
 
     dec->data = ve_malloc(VBV_SIZE);
-    if (!(dec->data))
+    if (! ve_isValid(dec->data))
         goto err_data;
     dec->data_pos = 0;
 
@@ -148,7 +148,7 @@ VdpStatus vdp_decoder_render(VdpDecoder decoder, VdpVideoSurface target, VdpPict
 
     for (i = 0; i < bitstream_buffer_count; i++)
     {
-        memcpy(dec->data + pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
+        ve_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
         pos += bitstream_buffers[i].bitstream_bytes;
     }
     //memory is mapped unchached, therefore no flush necessary. hopefully ;)
@@ -207,6 +207,7 @@ VdpStatus vdp_decoder_set_video_control_data(VdpDecoder decoder, VdpDecoderContr
         return dec->setVideoControlData(dec, id, data);
 }
 
+#if 1
 VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, VdpPictureInfo const *picture_info, uint32_t bitstream_buffer_count, VdpBitstreamBuffer const *bitstream_buffers, uint32_t* bitstream_pos_returned)
 {
 	decoder_ctx_t *dec = handle_get(decoder);
@@ -222,7 +223,7 @@ VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, 
 
 	for (i = 0; i < bitstream_buffer_count; i++)
 	{
-		memcpy(dec->data + pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
+		ve_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
 		pos += bitstream_buffers[i].bitstream_bytes;
 	}
 	//memory is mapped unchached, therefore no flush necessary. hopefully ;)
@@ -236,7 +237,7 @@ VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, 
 		{
 			dec->data_pos = pos;
 		}
-		memmove(dec->data, (char*)dec->data + dec->data_pos, pos - dec->data_pos);
+		//memmove(dec->data, (char*)dec->data + dec->data_pos, pos - dec->data_pos);
 	}
 	else
 	{
@@ -244,3 +245,4 @@ VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, 
 	}
 	return error;
 }
+#endif

@@ -30,10 +30,27 @@ void *ve_get(int engine, uint32_t flags);
 void ve_put(void);
 void* ve_get_regs();
 
-void *ve_malloc(int size);
-void ve_free(void *ptr);
-uint32_t ve_virt2phys(void *ptr);
-void ve_flush_cache(void *start, int len);
+#if USE_UMP
+  #include <ump/ump.h>
+  #include <ump/ump_ref_drv.h>
+
+  typedef struct _VE_MEMORY {
+      ump_handle mem_id;
+  }VE_MEMORY;
+
+#else
+  typedef void* VE_MEMORY;
+
+#endif
+
+VE_MEMORY ve_malloc(int size);
+int ve_isValid(VE_MEMORY mem);
+void ve_free(VE_MEMORY mem);
+uint32_t ve_virt2phys(VE_MEMORY mem);
+void ve_flush_cache(VE_MEMORY mem, int len);
+void ve_memcpy(VE_MEMORY dst, size_t offset, const void * src, size_t len);
+void* ve_getPointer(VE_MEMORY mem);
+unsigned char ve_byteAccess(VE_MEMORY mem, size_t offset);
 
 static inline void writel(uint32_t val, void *addr)
 {

@@ -61,7 +61,7 @@ VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, 
       return VDP_STATUS_INVALID_CHROMA_TYPE;
    }
    
-   if (!(vs->data))
+   if (! ve_isValid(vs->data))
    {
       printf("vdpau video surface=%d create, failure\n", *surface);
 
@@ -120,7 +120,7 @@ VdpStatus vdp_video_surface_put_bits_y_cb_cr(VdpVideoSurface surface, VdpYCbCrFo
 {
 	int i;
 	const uint8_t *src;
-	uint8_t *dst;
+	size_t offset = 0;
 	video_surface_ctx_t *vs = handle_get(surface);
 	if (!vs)
 		return VDP_STATUS_INVALID_HANDLE;
@@ -134,11 +134,10 @@ VdpStatus vdp_video_surface_put_bits_y_cb_cr(VdpVideoSurface surface, VdpYCbCrFo
 		if (vs->chroma_type != VDP_CHROMA_TYPE_422)
 			return VDP_STATUS_INVALID_CHROMA_TYPE;
 		src = source_data[0];
-		dst = vs->data;
 		for (i = 0; i < vs->height; i++) {
-			memcpy(dst, src, 2*vs->width);
+			ve_memcpy(vs->data, offset, src, 2*vs->width);
 			src += source_pitches[0];
-			dst += 2*vs->width;
+			offset += 2*vs->width;
 		}
 		break;
 	case VDP_YCBCR_FORMAT_Y8U8V8A8:
@@ -150,18 +149,17 @@ VdpStatus vdp_video_surface_put_bits_y_cb_cr(VdpVideoSurface surface, VdpYCbCrFo
 		if (vs->chroma_type != VDP_CHROMA_TYPE_420)
 			return VDP_STATUS_INVALID_CHROMA_TYPE;
 		src = source_data[0];
-		dst = vs->data;
 		for (i = 0; i < vs->height; i++) {
-			memcpy(dst, src, vs->width);
+			ve_memcpy(vs->data, offset, src, vs->width);
 			src += source_pitches[0];
-			dst += vs->width;
+			offset += vs->width;
 		}
 		src = source_data[1];
-		dst = vs->data + vs->plane_size;
+		offset = vs->plane_size;
 		for (i = 0; i < vs->height / 2; i++) {
-			memcpy(dst, src, vs->width);
+			ve_memcpy(vs->data, offset, src, vs->width);
 			src += source_pitches[1];
-			dst += vs->width;
+			offset += vs->width;
 		}
 		break;
 
@@ -169,25 +167,24 @@ VdpStatus vdp_video_surface_put_bits_y_cb_cr(VdpVideoSurface surface, VdpYCbCrFo
 		if (vs->chroma_type != VDP_CHROMA_TYPE_420)
 			return VDP_STATUS_INVALID_CHROMA_TYPE;
 		src = source_data[0];
-		dst = vs->data;
 		for (i = 0; i < vs->height; i++) {
-			memcpy(dst, src, vs->width);
+			ve_memcpy(vs->data, offset, src, vs->width);
 			src += source_pitches[0];
-			dst += vs->width;
+			offset += vs->width;
 		}
 		src = source_data[2];
-		dst = vs->data + vs->plane_size;
+		offset = vs->plane_size;
 		for (i = 0; i < vs->height / 2; i++) {
-			memcpy(dst, src, vs->width / 2);
+			ve_memcpy(vs->data, offset, src, vs->width / 2);
 			src += source_pitches[1];
-			dst += vs->width / 2;
+			offset += vs->width / 2;
 		}
 		src = source_data[1];
-		dst = vs->data + vs->plane_size + vs->plane_size / 4;
+		offset = vs->plane_size + vs->plane_size / 4;
 		for (i = 0; i < vs->height / 2; i++) {
-			memcpy(dst, src, vs->width / 2);
+			ve_memcpy(vs->data, offset, src, vs->width / 2);
 			src += source_pitches[2];
-			dst += vs->width / 2;
+			offset += vs->width / 2;
 		}
 		break;
 	}

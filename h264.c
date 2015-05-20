@@ -26,9 +26,11 @@
 
 extern uint64_t get_time(void);
 
-static int find_startcode(const uint8_t *data, int len, int start)
+static int find_startcode(VE_MEMORY mem, int len, int start)
 {
 	int pos, zeros = 0;
+	uint8_t* data = (uint8_t*)ve_getPointer(mem);
+	
 	for (pos = start; pos < len; pos++)
 	{
 		if (data[pos] == 0x00)
@@ -146,7 +148,7 @@ typedef struct
 
 typedef struct
 {
-	void *extra_data;
+	VE_MEMORY extra_data;
 } h264_private_t;
 
 static void h264_private_free(decoder_ctx_t *decoder)
@@ -158,7 +160,7 @@ static void h264_private_free(decoder_ctx_t *decoder)
 
 typedef struct
 {
-	void *extra_data;
+	VE_MEMORY extra_data;
 	int extra_data_len;
 	int pos;
 } h264_video_private_t;
@@ -668,7 +670,7 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 
 		pos = find_startcode(decoder->data, len, pos) + 3;
 
-		h->nal_unit_type = ((uint8_t *)(decoder->data))[pos++] & 0x1f;
+		h->nal_unit_type = ve_byteAccess(decoder->data, pos++) & 0x1f;
 
 		if (h->nal_unit_type != 5 && h->nal_unit_type != 1)
 		{
@@ -842,7 +844,7 @@ VdpStatus new_decoder_h264(decoder_ctx_t *decoder)
 	}
 
 	decoder_p->extra_data = ve_malloc(extra_data_size);
-	if (!decoder_p->extra_data)
+	if (! ve_isValid(decoder_p->extra_data))
 	{
 		free(decoder_p);
 		return VDP_STATUS_RESOURCES;

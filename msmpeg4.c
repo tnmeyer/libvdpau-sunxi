@@ -305,7 +305,7 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
 
     int i;
     void *ve_regs = ve_get_regs();
-    bitstream bs = { .data = decoder->data, .length = len, .bitpos = 0 };
+    bitstream bs = { .data = ve_getPointer(decoder->data), .length = len, .bitpos = 0 };
 
         
     if (!decode_vop_header(&bs, info, decoder_p))
@@ -331,13 +331,13 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
     {
             video_surface_ctx_t *forward = handle_get(info->forward_reference);
             writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
-            writel(ve_virt2phys(forward->data + forward->plane_size), ve_regs + VE_MPEG_FWD_CHROMA);
+            writel(ve_virt2phys(forward->data) + forward->plane_size, ve_regs + VE_MPEG_FWD_CHROMA);
     }
     if (info->backward_reference != VDP_INVALID_HANDLE)
     {
             video_surface_ctx_t *backward = handle_get(info->backward_reference);
             writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
-            writel(ve_virt2phys(backward->data + backward->plane_size), ve_regs + VE_MPEG_BACK_CHROMA);
+            writel(ve_virt2phys(backward->data) + backward->plane_size, ve_regs + VE_MPEG_BACK_CHROMA);
     }
     else
     {
@@ -372,9 +372,9 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
 
     // set output buffers (Luma / Croma)
     writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_REC_LUMA);
-    writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_REC_CHROMA);
+    writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_REC_CHROMA);
     writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_ROT_LUMA);
-    writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_ROT_CHROMA);
+    writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_ROT_CHROMA);
 
     uint32_t rotscale = 0;
     //bit 0-3: rotate_angle
@@ -544,15 +544,15 @@ VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder)
     int height = ((decoder->height + 15) / 16);
 
     decoder_p->mbh_buffer = ve_malloc(height * 2048);
-    if (!decoder_p->mbh_buffer)
+    if (! ve_isValid(decoder_p->mbh_buffer))
        goto err_mbh;
 
     decoder_p->dcac_buffer = ve_malloc(width * height * 2);
-    if (!decoder_p->dcac_buffer)
+    if (! ve_isValid(decoder_p->dcac_buffer))
        goto err_dcac;
 
     decoder_p->ncf_buffer = ve_malloc(4 * 1024);
-    if (!decoder_p->ncf_buffer)
+    if (! ve_isValid(decoder_p->ncf_buffer))
        goto err_ncf;
 
     decoder_p->vop_header.flipflop_rounding = 1;

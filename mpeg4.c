@@ -202,7 +202,7 @@ static void dumpData(char* data)
 
 static int find_resynccode(bitstream *bs, int resync_length)
 {
-    unsigned int pos, zeros = 0;
+    unsigned int pos;
     
     bytealign(bs);
     
@@ -444,7 +444,6 @@ static int find_pmv (bitstream *bs, mp4_private_t *priv, int block, int comp)
   int xin1, xin2, xin3;
   int yin1, yin2, yin3;
   int vec1, vec2, vec3;
-  vop_header_t *h = &priv->vop_header;
   video_packet_header_t *vp = &priv->vop_header;
 
 	int x = vp->mb_xpos;
@@ -755,7 +754,7 @@ int read_dmv_length(bitstream *gb)
     }
     else if( value == 3) 
     {
-        int i = 3;
+        //int i = 3;
         value = 5;
         while (value < 14)
         {
@@ -1534,7 +1533,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 */
 	int i;
 	void *ve_regs = ve_get_regs();
-	bitstream bs = { .data = decoder->data, .length = len, .bitpos = 0 };
+	bitstream bs = { .data = ve_getPointer(decoder->data), .length = len, .bitpos = 0 };
     
 	while (find_startcode(&bs))
 	{
@@ -1569,7 +1568,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 if(forward)
                 {
                    writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
-                   writel(ve_virt2phys(forward->data + forward->plane_size), ve_regs + VE_MPEG_FWD_CHROMA);
+                   writel(ve_virt2phys(forward->data) + forward->plane_size, ve_regs + VE_MPEG_FWD_CHROMA);
                 }
             }
             if (info->backward_reference != VDP_INVALID_HANDLE)
@@ -1578,7 +1577,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 if(backward)
                 {
                    writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
-                   writel(ve_virt2phys(backward->data + backward->plane_size), ve_regs + VE_MPEG_BACK_CHROMA);
+                   writel(ve_virt2phys(backward->data) + backward->plane_size, ve_regs + VE_MPEG_BACK_CHROMA);
                 }
             }
             else
@@ -1615,9 +1614,9 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 
             // set output buffers (Luma / Croma)
             writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_REC_LUMA);
-            writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_REC_CHROMA);
+            writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_REC_CHROMA);
             writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_ROT_LUMA);
-            writel(ve_virt2phys(output->data + output->plane_size), ve_regs + VE_MPEG_ROT_CHROMA);
+            writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_ROT_CHROMA);
 
             uint32_t rotscale = 0;
             //bit 0-3: rotate_angle
@@ -1873,15 +1872,15 @@ VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder)
 	int height = ((decoder->height + 15) / 16);
 
 	decoder_p->mbh_buffer = ve_malloc(height * 2048);
-	if (!decoder_p->mbh_buffer)
+	if (! ve_isValid(decoder_p->mbh_buffer))
 		goto err_mbh;
 
 	decoder_p->dcac_buffer = ve_malloc(width * height * 2);
-	if (!decoder_p->dcac_buffer)
+	if (! ve_isValid(decoder_p->dcac_buffer))
 		goto err_dcac;
 
 	decoder_p->ncf_buffer = ve_malloc(4 * 1024);
-	if (!decoder_p->ncf_buffer)
+	if (! ve_isValid(decoder_p->ncf_buffer))
 		goto err_ncf;
 
 	decoder->decode = mpeg4_decode;

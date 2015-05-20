@@ -28,6 +28,8 @@
 #include <vdpau/vdpau.h>
 #include <X11/Xlib.h>
 
+#include "ve.h"
+
 #define INTERNAL_YCBCR_FORMAT (VdpYCbCrFormat)0xffff
 
 typedef struct
@@ -50,7 +52,7 @@ typedef struct video_surface_ctx_struct
 	uint32_t width, height;
 	VdpChromaType chroma_type;
 	VdpYCbCrFormat source_format;
-	void *data;
+	VE_MEMORY data;
 	int plane_size;
 	void *decoder_private;
 	void (*decoder_private_free)(struct video_surface_ctx_struct *surface);
@@ -60,7 +62,7 @@ typedef struct decoder_ctx_struct
 {
 	uint32_t width, height;
 	VdpDecoderProfile profile;
-	void *data;
+	VE_MEMORY data;
 	unsigned int data_pos;
 	device_ctx_t *device;
 	VdpStatus (*decode)(struct decoder_ctx_struct *decoder, VdpPictureInfo const *info, const int len, video_surface_ctx_t *output);

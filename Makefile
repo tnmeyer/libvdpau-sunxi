@@ -7,6 +7,13 @@ LDFLAGS =
 LIBS = -lrt -lm -lpthread
 CC = gcc
 
+USE_UMP = 1
+
+ifeq ($(USE_UMP),1)
+LIBS  += -lUMP
+CFLAGS += -DUSE_UMP=1
+endif
+
 MAKEFLAGS += -rR --no-print-directory
 
 DEP_CFLAGS = -MD -MP -MQ $@

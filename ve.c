@@ -124,6 +124,11 @@ int ve_open(void)
 	ve.version = readl(ve.regs + VE_VERSION) >> 16;
 	printf("[VDPAU SUNXI] VE version 0x%04x opened.\n", ve.version);
 
+#if USE_UMP
+	if(ump_open() != UMP_OK)
+	  goto err;
+#endif
+	
 	return 1;
 
 err:
@@ -145,6 +150,9 @@ void ve_close(void)
 
 	close(ve.fd);
 	ve.fd = -1;
+#if USE_UMP
+	ump_close();
+#endif
 }
 
 int ve_get_version(void)
@@ -180,6 +188,55 @@ void* ve_get_regs()
 {
 	return ve.regs;
 }
+#if USE_UMP
+
+VE_MEMORY ve_malloc(int size)
+{
+  VE_MEMORY mem;
+  mem.mem_id = ump_ref_drv_allocate (size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR);
+  if(mem.mem_id == UMP_INVALID_MEMORY_HANDLE)
+  {
+    printf("could not allocate ump buffer!\n");
+    exit(1);
+  }
+  return mem;
+}
+
+int ve_isValid(VE_MEMORY mem)
+{
+  return (mem.mem_id != UMP_INVALID_MEMORY_HANDLE);
+}
+
+void ve_free(VE_MEMORY mem)
+{
+  ump_reference_release(mem.mem_id);
+}
+
+uint32_t ve_virt2phys(VE_MEMORY mem)
+{
+  return (uint32_t)ump_phys_address_get(mem.mem_id);
+}
+
+void ve_flush_cache(VE_MEMORY mem, int len)
+{
+  ump_cpu_msync_now(mem.mem_id, UMP_MSYNC_CLEAN_AND_INVALIDATE, 0, len);
+}
+void ve_memcpy(VE_MEMORY dst, size_t offset, const void * src, size_t len)
+{
+  ump_write(dst.mem_id, offset, src, len);
+}
+void* ve_getPointer(VE_MEMORY mem)
+{
+  return ump_mapped_pointer_get(mem.mem_id);
+}
+
+unsigned char ve_byteAccess(VE_MEMORY mem, size_t offset)
+{
+  char *ptr = (char*)ump_mapped_pointer_get(mem.mem_id);
+  return ptr[offset];
+}
+
+#else
 
 void *ve_malloc(int size)
 {
@@ -235,6 +292,10 @@ out:
 	return addr;
 }
 
+int ve_isValid(void* mem)
+{
+  return mem != NULL;
+}
 void ve_free(void *ptr)
 {
 	if (ve.fd == -1)
@@ -319,3 +380,32 @@ void ve_flush_cache(void *start, int len)
 
 	ioctl(ve.fd, IOCTL_FLUSH_CACHE, (void*)(&range));
 }
+
+/*
+void *ve_add2(void *val1, void* val2)
+{
+	return val1 + val2;
+}
+
+void *ve_add3(void *val1, void* val2, void *val3)
+{
+	return val1 + val2 + val3;
+}
+*/
+void ve_memcpy(void* dst, size_t offset, const void * src, size_t len)
+{
+	memcpy((char*)dst + offset, src, len);
+}
+
+void* ve_getPointer(VE_MEMORY mem)
+{
+  return mem;
+}
+
+unsigned char ve_byteAccess(VE_MEMORY mem, size_t offset)
+{
+  char *ptr = (char*)mem;
+  return ptr[offset];
+}
+
+#endif
