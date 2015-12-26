@@ -148,9 +148,9 @@ typedef struct
 
 typedef struct
 {
-    VE_MEMORY                   mbh_buffer;
-    VE_MEMORY                   dcac_buffer;
-    VE_MEMORY                   ncf_buffer;
+    CEDARV_MEMORY                   mbh_buffer;
+    CEDARV_MEMORY                   dcac_buffer;
+    CEDARV_MEMORY                   ncf_buffer;
 /*    vol_header_t                vol_hdr; */
     video_packet_header_t       pkt_hdr;
     VdpDecoderMpeg4VolHeader    mpeg4VolHdr;

@@ -20,14 +20,22 @@
 #include <string.h>
 #include "vdpau_private.h"
 #include "ve.h"
+#include "veisp.h"
 #include <time.h>
 #include <assert.h>
 #include "bitstream.h"
 #include "mpeg4.h"
 #include "stdlib.h"
 #include "mp4_vars.h"
+#include <stdio.h>
+#include <unistd.h>
 
 #define TIMEMEAS 1
+
+#define USE_ISP_HW 0
+#define USE_XY_CONV 0
+#define USE_DISP_HW 1
+#define USE_ISP_SW 0
 
 static int mpeg4_calcResyncMarkerLength(mp4_private_t *decoder_p);
 uint32_t show_bits_aligned(bitstream *bs, int n, int aligned);
@@ -223,9 +231,9 @@ static int find_resynccode(bitstream *bs, int resync_length)
 static void mp4_private_free(decoder_ctx_t *decoder)
 {
     mp4_private_t *decoder_p = (mp4_private_t *)decoder->private;
-    ve_free(decoder_p->mbh_buffer);
-    ve_free(decoder_p->dcac_buffer);
-    ve_free(decoder_p->ncf_buffer);
+    cedarv_free(decoder_p->mbh_buffer);
+    cedarv_free(decoder_p->dcac_buffer);
+    cedarv_free(decoder_p->ncf_buffer);
     free(decoder_p);
 }
 
@@ -1516,7 +1524,10 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
     uint32_t mba_reg = 0x0;
     static int vop_s_frame_seen = 0;
     int last_mba = 0;
-
+    static int image_saved = 0;
+    uint16_t width;
+    uint16_t height;
+    
 #if 1
     if(!decoder_p->mpeg4VolHdrSet)
     {
@@ -1532,8 +1543,8 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
 	}
 */
 	int i;
-	void *ve_regs = ve_get_regs();
-	bitstream bs = { .data = ve_getPointer(decoder->data), .length = len, .bitpos = 0 };
+	void *cedarv_regs = cedarv_get_regs();
+	bitstream bs = { .data = cedarv_getPointer(decoder->data), .length = len, .bitpos = 0 };
     
 	while (find_startcode(&bs))
 	{
@@ -1549,16 +1560,16 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             macroblock(&bs, decoder_p);
             bs=bs1;
 #endif
-            ve_regs = ve_get(VE_ENGINE_MPEG, 0);
+            cedarv_regs = cedarv_get(CEDARV_ENGINE_MPEG, 0);
             // activate MPEG engine
-            writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x0, ve_regs + VE_CTRL);
+            writel((readl(cedarv_regs + CEDARV_CTRL) & ~0xf) | 0x0, cedarv_regs + CEDARV_CTRL);
             
 #if 1
             // set quantisation tables
             for (i = 0; i < 64; i++)
-                writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+                writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], cedarv_regs + CEDARV_MPEG_IQ_MIN_INPUT);
             for (i = 0; i < 64; i++)
-                writel((uint32_t)(i) << 8 | info->non_intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+                writel((uint32_t)(i) << 8 | info->non_intra_quantizer_matrix[i], cedarv_regs + CEDARV_MPEG_IQ_MIN_INPUT);
 #endif
 
             // set forward/backward predicion buffers
@@ -1567,8 +1578,11 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 video_surface_ctx_t *forward = handle_get(info->forward_reference);
                 if(forward)
                 {
-                   writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
-                   writel(ve_virt2phys(forward->data) + forward->plane_size, ve_regs + VE_MPEG_FWD_CHROMA);
+                   assert(cedarv_isValid(forward->dataY));
+                   assert(cedarv_isValid(forward->dataU));
+                   writel(cedarv_virt2phys(forward->dataY), cedarv_regs + CEDARV_MPEG_FWD_LUMA);
+                   writel(cedarv_virt2phys(forward->dataU)/* + forward->plane_size*/, cedarv_regs + CEDARV_MPEG_FWD_CHROMA);
+                   handle_release(info->forward_reference);
                 }
             }
             if (info->backward_reference != VDP_INVALID_HANDLE)
@@ -1576,27 +1590,30 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 video_surface_ctx_t *backward = handle_get(info->backward_reference);
                 if(backward)
                 {
-                   writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
-                   writel(ve_virt2phys(backward->data) + backward->plane_size, ve_regs + VE_MPEG_BACK_CHROMA);
+                   assert(cedarv_isValid(backward->dataY));
+                   assert(cedarv_isValid(backward->dataU));
+                   writel(cedarv_virt2phys(backward->dataY), cedarv_regs + CEDARV_MPEG_BACK_LUMA);
+                   writel(cedarv_virt2phys(backward->dataU)/* + backward->plane_size*/, cedarv_regs + CEDARV_MPEG_BACK_CHROMA);
+                   handle_release(info->backward_reference);
                 }
             }
             else
             {
-                writel(0x0, ve_regs + VE_MPEG_BACK_LUMA);
-                writel(0x0, ve_regs + VE_MPEG_BACK_CHROMA);
+                writel(0x0, cedarv_regs + CEDARV_MPEG_BACK_LUMA);
+                writel(0x0, cedarv_regs + CEDARV_MPEG_BACK_CHROMA);
             }
 
             // set trb/trd
             if (decoder_p->vop_header.vop_coding_type == VOP_B)
             {
-                writel((info->trb[0] << 16) | (info->trd[0] << 0), ve_regs + VE_MPEG_TRBTRD_FRAME);
+                writel((info->trb[0] << 16) | (info->trd[0] << 0), cedarv_regs + CEDARV_MPEG_TRBTRD_FRAME);
                 // unverified:
-                //writel((info->trb[1] << 16) | (info->trd[1] << 0), ve_regs + VE_MPEG_TRBTRD_FIELD);
-                writel(0, ve_regs + VE_MPEG_TRBTRD_FIELD);
+                //writel((info->trb[1] << 16) | (info->trd[1] << 0), cedarv_regs + CEDARV_MPEG_TRBTRD_FIELD);
+                writel(0, cedarv_regs + CEDARV_MPEG_TRBTRD_FIELD);
             }
             // set size
-            uint16_t width  = (decoder_p->mpeg4VolHdr.video_object_layer_width + 15) / 16;
-            uint16_t height = (decoder_p->mpeg4VolHdr.video_object_layer_height + 15) / 16;
+            width  = (decoder_p->mpeg4VolHdr.video_object_layer_width + 15) / 16;
+            height = (decoder_p->mpeg4VolHdr.video_object_layer_height + 15) / 16;
             if(width == 0 || height == 0) {
                 //some videos do not have a VOL, at least at the right time
                 //try with the following parameters
@@ -1604,19 +1621,21 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 height = ((decoder->height + 15) / 16);
             }
 
-            writel((width <<16) | (width << 8) | height, ve_regs + VE_MPEG_SIZE);
-            writel(((width * 16) << 16) | (height * 16), ve_regs + VE_MPEG_FRAME_SIZE);
+            writel((width <<16) | (width << 8) | height, cedarv_regs + CEDARV_MPEG_SIZE);
+            writel(((width * 16) << 16) | (height * 16), cedarv_regs + CEDARV_MPEG_FRAME_SIZE);
 
             // set buffers
-            writel(ve_virt2phys(decoder_p->mbh_buffer), ve_regs + VE_MPEG_MBH_ADDR);
-            writel(ve_virt2phys(decoder_p->dcac_buffer), ve_regs + VE_MPEG_DCAC_ADDR);
-            writel(ve_virt2phys(decoder_p->ncf_buffer), ve_regs + VE_MPEG_NCF_ADDR);
+            writel(cedarv_virt2phys(decoder_p->mbh_buffer), cedarv_regs + CEDARV_MPEG_MBH_ADDR);
+            writel(cedarv_virt2phys(decoder_p->dcac_buffer), cedarv_regs + CEDARV_MPEG_DCAC_ADDR);
+            writel(cedarv_virt2phys(decoder_p->ncf_buffer), cedarv_regs + CEDARV_MPEG_NCF_ADDR);
 
             // set output buffers (Luma / Croma)
-            writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_REC_LUMA);
-            writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_REC_CHROMA);
-            writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_ROT_LUMA);
-            writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_ROT_CHROMA);
+	    assert(cedarv_isValid(output->dataY));
+	    assert(cedarv_isValid(output->dataU));
+            writel(cedarv_virt2phys(output->dataY), cedarv_regs + CEDARV_MPEG_REC_LUMA);
+            writel(cedarv_virt2phys(output->dataU)/* + output->plane_size*/, cedarv_regs + CEDARV_MPEG_REC_CHROMA);
+            writel(cedarv_virt2phys(output->dataY), cedarv_regs + CEDARV_MPEG_ROT_LUMA);
+            writel(cedarv_virt2phys(output->dataU)/* + output->plane_size*/, cedarv_regs + CEDARV_MPEG_ROT_CHROMA);
 
             uint32_t rotscale = 0;
             //bit 0-3: rotate_angle
@@ -1631,31 +1650,31 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
             const int no_scale = 2;
             const int no_rotate = 6;
             rotscale |= 0x40620000;
-            writel(rotscale, ve_regs + VE_MPEG_SDROT_CTRL);
+            writel(rotscale, cedarv_regs + CEDARV_MPEG_SDROT_CTRL);
 
                         // ??
-            uint32_t ve_control = 0;
-            ve_control |= 0x80000000;
+            uint32_t cedarv_control = 0;
+            cedarv_control |= 0x80000000;
             if(decoder_p->vop_header.vop_coding_type != VOP_I && vol->quarter_sample != 0)
-                ve_control |= (1 << 20);
+                cedarv_control |= (1 << 20);
 
-            ve_control |= (1 << 19);
+            cedarv_control |= (1 << 19);
             //if not divx then 1, else 2 (but divx version dependent)
-            ve_control |= (1 << 14);
+            cedarv_control |= (1 << 14);
             // if p-frame and some other conditions
             //if(p-frame && 
-            ve_control |= (decoder_p->vop_header.vop_coding_type == VOP_P ? 0x1 : 0x0) << 12;
-            ve_control |= (1 << 8);
-            ve_control |= (1 << 7);
-            ve_control |= (1 << 4);
-            ve_control |= (1 << 3);
-            //ve_control = 0x80084198;
-            writel(ve_control, ve_regs + VE_MPEG_CTRL);
+            cedarv_control |= (decoder_p->vop_header.vop_coding_type == VOP_P ? 0x1 : 0x0) << 12;
+            cedarv_control |= (1 << 8);
+            cedarv_control |= (1 << 7);
+            cedarv_control |= (1 << 4);
+            cedarv_control |= (1 << 3);
+            //cedarv_control = 0x80084198;
+            writel(cedarv_control, cedarv_regs + CEDARV_MPEG_CTRL);
 #if 0
-            writel(0x800001b8, ve_regs + VE_MPEG_CTRL);
+            writel(0x800001b8, cedarv_regs + CEDARV_MPEG_CTRL);
 #endif
             mp4mbaAddr_reg = 0;
-            writel(mp4mbaAddr_reg, ve_regs + VE_MPEG_MBA);
+            writel(mp4mbaAddr_reg, cedarv_regs + CEDARV_MPEG_MBA);
 
             int marker_length = mpeg4_calcResyncMarkerLength(decoder_p);
 
@@ -1694,60 +1713,60 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 //vop_hdr	|= (decoder_p->vop_header.vop_coding_type == VOP_B ? 
                 //                info->vop_fcode_backward & 0x7 : 0) << 0;
                 vop_hdr	|= decoder_p->vop_header.fcode_backward & 0x7 << 0;
-                writel(vop_hdr, ve_regs + VE_MPEG_VOP_HDR);
+                writel(vop_hdr, cedarv_regs + CEDARV_MPEG_VOP_HDR);
 
                 decoder_p->vop_header.last_coding_type = decoder_p->vop_header.vop_coding_type;
 
-                writel(decoder_p->vop_header.vop_quant, ve_regs + VE_MPEG_QP_INPUT);
+                writel(decoder_p->vop_header.vop_quant, cedarv_regs + CEDARV_MPEG_QP_INPUT);
 
-                writel(mba_reg, ve_regs + VE_MPEG_MBA);
+                writel(mba_reg, cedarv_regs + CEDARV_MPEG_MBA);
 
                 //clean up everything
-                writel(0xffffffff, ve_regs + VE_MPEG_STATUS);
+                writel(0xffffffff, cedarv_regs + CEDARV_MPEG_STATUS);
 
                 // set input offset in bits
-                writel(bs.bitpos, ve_regs + VE_MPEG_VLD_OFFSET);
+                writel(bs.bitpos, cedarv_regs + CEDARV_MPEG_VLD_OFFSET);
 
                 // set input length in bits
-                writel(((len*8 - bs.bitpos)+31) & ~0x1f, ve_regs + VE_MPEG_VLD_LEN);
+                writel(((len*8 - bs.bitpos)+31) & ~0x1f, cedarv_regs + CEDARV_MPEG_VLD_LEN);
 
                 // input end
-                uint32_t input_addr = ve_virt2phys(decoder->data);
-                writel(input_addr + VBV_SIZE - 1, ve_regs + VE_MPEG_VLD_END);
+                uint32_t input_addr = cedarv_virt2phys(decoder->data);
+                writel(input_addr + VBV_SIZE - 1, cedarv_regs + CEDARV_MPEG_VLD_END);
 
                 // set input buffer
-                writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), ve_regs + VE_MPEG_VLD_ADDR);
+                writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), cedarv_regs + CEDARV_MPEG_VLD_ADDR);
 
-                writel(0x0, ve_regs + VE_MPEG_MSMPEG4_HDR);
-                writel(0x0, ve_regs + VE_MPEG_CTR_MB);
+                writel(0x0, cedarv_regs + CEDARV_MPEG_MSMPEG4_HDR);
+                writel(0x0, cedarv_regs + CEDARV_MPEG_CTR_MB);
 
                 if(decoder_p->vop_header.vop_coding_type == VOP_S)
                 {
                     uint32_t mpeg_sdlx = decoder_p->vop_header.virtual_ref2[0][0]<<16 | 
                             (decoder_p->vop_header.virtual_ref2[1][0] & 0xffff);
-                    writel(mpeg_sdlx, ve_regs + VE_MPEG_SDLX);
-                    writel(mpeg_sdlx, ve_regs + VE_MPEG_SDCX);
+                    writel(mpeg_sdlx, cedarv_regs + CEDARV_MPEG_SDLX);
+                    writel(mpeg_sdlx, cedarv_regs + CEDARV_MPEG_SDCX);
     
                     int32_t mpeg_sdly =  decoder_p->vop_header.virtual_ref2[0][1]<<16 | 
                             (decoder_p->vop_header.virtual_ref2[1][1] & 0xffff);
-                    writel(mpeg_sdly, ve_regs + VE_MPEG_SDLY);
-                    writel(mpeg_sdly, ve_regs + VE_MPEG_SDCY);
+                    writel(mpeg_sdly, cedarv_regs + CEDARV_MPEG_SDLY);
+                    writel(mpeg_sdly, cedarv_regs + CEDARV_MPEG_SDCY);
                 
                     uint32_t mpeg_spriteshift = (decoder_p->vop_header.sprite_shift[0] & 0xff);
                     mpeg_spriteshift |= ((decoder_p->vop_header.sprite_shift[1] & 0xff) << 8);
-                    writel(mpeg_spriteshift, ve_regs + VE_MPEG_SPRITESHIFT);
+                    writel(mpeg_spriteshift, cedarv_regs + CEDARV_MPEG_SPRITESHIFT);
 
                     uint32_t mpeg_sol = decoder_p->vop_header.sprite_ref[0][0] << 16;
                     mpeg_sol |= (decoder_p->vop_header.sprite_ref[0][1] & 0xffff);
-                    writel(mpeg_sol, ve_regs + VE_MPEG_SOL);
+                    writel(mpeg_sol, cedarv_regs + CEDARV_MPEG_SOL);
 
-                    writel(decoder_p->vop_header.socx, ve_regs + VE_MPEG_SOCX);
-                    writel(decoder_p->vop_header.socy, ve_regs + VE_MPEG_SOCY);
+                    writel(decoder_p->vop_header.socx, cedarv_regs + CEDARV_MPEG_SOCX);
+                    writel(decoder_p->vop_header.socy, cedarv_regs + CEDARV_MPEG_SOCY);
 
                     int mv5 = decoder_p->vop_header.mv5_upper << 16 | decoder_p->vop_header.mv5_lower;
                     int mv6 = decoder_p->vop_header.mv6_upper << 16 | decoder_p->vop_header.mv6_lower;
-                    writel(mv5, ve_regs + VE_MPEG_MV5);
-                    writel(mv6, ve_regs + VE_MPEG_MV6);
+                    writel(mv5, cedarv_regs + CEDARV_MPEG_MV5);
+                    writel(mv6, cedarv_regs + CEDARV_MPEG_MV6);
                 }
                 // trigger
                 bitstream bs_saved = bs;
@@ -1777,30 +1796,31 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                 mpeg_trigger |= 0xd;
                 mpeg_trigger |= (error_disable << 31);
                 mpeg_trigger |= (0x4000000);
-                writel(mpeg_trigger, ve_regs + VE_MPEG_TRIGGER);
+
+                writel(mpeg_trigger, cedarv_regs + CEDARV_MPEG_TRIGGER);
 
                 // wait for interrupt
 #ifdef TIMEMEAS
             uint64_t tv, tv2;
                 tv = get_time();
 #endif
-                ve_wait(1);
+                cedarv_wait(1);
 #ifdef TIMEMEAS                
                 tv2 = get_time();
                 if (tv2-tv > 10000000) {
-                    printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+                    printf("cedarv_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
                 }
 #endif
                 // clean interrupt flag
-                writel(0x0000c00f, ve_regs + VE_MPEG_STATUS);
-                int error = readl(ve_regs + VE_MPEG_ERROR);
+                writel(0x0000c00f, cedarv_regs + CEDARV_MPEG_STATUS);
+                int error = readl(cedarv_regs + CEDARV_MPEG_ERROR);
                 if(error)
                     printf("got error=%d while decoding frame=%ld\n", error, num_pics);
-                writel(0x0, ve_regs + VE_MPEG_ERROR);
+                writel(0x0, cedarv_regs + CEDARV_MPEG_ERROR);
 
                 ++num_pics;
 
-                int veCurPos = readl(ve_regs + VE_MPEG_VLD_OFFSET);
+                int veCurPos = readl(cedarv_regs + CEDARV_MPEG_VLD_OFFSET);
                 int byteCurPos = (veCurPos+7) / 8;
 
                 more_mbs = 0;
@@ -1815,7 +1835,7 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                                                  decoder, 
                                                  decoder_p);
                             int result;
-                            bitstream bs1 = bs;
+//                            bitstream bs1 = bs;
                             decoder_p->vop_header.quantizer = decoder_p->vop_header.vop_quant;
 
 /*
@@ -1835,11 +1855,182 @@ int mpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info, 
                         }
                     }
                 }
-                writel(readl(ve_regs + VE_MPEG_CTRL) | 0x7C, ve_regs + VE_MPEG_CTRL);            
+                writel(readl(cedarv_regs + CEDARV_MPEG_CTRL) | 0x7C, cedarv_regs + CEDARV_MPEG_CTRL);            
             }
             // stop MPEG engine
-            writel((readl(ve_regs + VE_CTRL) & ~0xf) | 0x7, ve_regs + VE_CTRL);
-            ve_put();
+            writel((readl(cedarv_regs + CEDARV_CTRL) & ~0xf) | 0x7, cedarv_regs + CEDARV_CTRL);
+            cedarv_put();
+
+#if 0
+#if USE_ISP_HW == 1
+	    veisp_selectSubEngine();
+	    veisp_setPicSize(width*16, height*16);
+	    
+	    veisp_setInBufferPtr(cedarv_virt2phys(output->dataY), cedarv_virt2phys(output->dataU));
+	    veisp_setOutBufferPtr(cedarv_virt2phys(output->convY), cedarv_virt2phys(output->convUV));
+	    void *mapped_conv = cedarv_getPointer(output->convY);
+	    memset(mapped_conv, 0x80, cedarv_getSize(output->convY));
+	    mapped_conv = cedarv_getPointer(output->convUV);
+	    memset(mapped_conv, 0x80, cedarv_getSize(output->convUV));
+	    
+	    veisp_initCtrl(0x2);
+	    veisp_trigger();
+	    cedarv_wait(20);
+#endif
+
+#if 0
+	    if(image_saved==0)
+	    {
+#if USE_ISP_HW == 1
+               int i, j;
+               int different = 0;
+            
+               char *xy_mappedY = (char*)malloc(cedarv_getSize(output->convY));
+               FILE* fp1 = fopen("/tmp/ump_mpeg4_xyconvY", "r");
+               int sizeY1 = cedarv_getSize(output->convY);
+               fread(xy_mappedY, 1, sizeY1, fp1);
+               fclose(fp1);
+            
+               for(i=1; i < 8; ++i)
+               {
+                  veisp_selectSubEngine();
+                  veisp_setPicSize(width*16, height*16);
+	    
+                  veisp_setInBufferPtr(cedarv_virt2phys(output->dataY), cedarv_virt2phys(output->dataU));
+                  veisp_setOutBufferPtr(cedarv_virt2phys(output->convY), cedarv_virt2phys(output->convUV));
+                  void *mapped_conv = cedarv_getPointer(output->convY);
+                  memset(mapped_conv, 0x80, cedarv_getSize(output->convY));
+                  mapped_conv = cedarv_getPointer(output->convUV);
+                  memset(mapped_conv, 0x80, cedarv_getSize(output->convUV));
+	    
+                  veisp_initCtrl(i);
+                  veisp_trigger();
+                  cedarv_wait(20);
+                  mapped_conv = cedarv_getSize(output->convY);
+                  for(j = 0; j < sizeY1; ++j)
+                  {
+                     if(xy_mappedY[j] != ((char*)mapped_conv)[j])
+                        different = 1;
+                  }
+                  if(different == 0)
+                     printf("found matching register value=%d\n", i);
+                  different = 0;
+               }
+
+               free(xy_mappedY);
+#endif
+              int sizeY, sizeU, sizeV;
+	      FILE *fp = fopen("/tmp/ump_mpeg4_yuvY", "w");
+	      void *mapped_dataY = cedarv_getPointer(output->dataY);
+	      sizeY = cedarv_getSize(output->dataY);
+	      fwrite(mapped_dataY, 1, sizeY, fp);
+	      fclose(fp);
+	      fp = fopen("/tmp/ump_mpeg4_yuvU", "w");
+	      void* mapped_dataU = cedarv_getPointer(output->dataU);
+	      sizeU = cedarv_getSize(output->dataU);
+	      fwrite(mapped_dataU, 1, sizeU, fp);
+	      fclose(fp);
+	      printf("               height: %d width: %d sizeY: %d sizeU: %d\n", 
+		     height*16, width*16, sizeY, sizeU);
+	      if( cedarv_isValid(output->dataV))
+	      {
+		fp = fopen("/tmp/ump_mpeg4_yuvV", "w");
+		void *mapped_dataV = cedarv_getPointer(output->dataV);
+		sizeV = cedarv_getSize(output->dataV);
+		fwrite(mapped_dataV, 1, sizeV, fp);
+		fclose(fp);
+	      }
+
+	      void * mapped_convY = cedarv_getPointer(output->convY);
+	      void* mapped_convU = cedarv_getPointer(output->convU);
+              void* mapped_convV = cedarv_getPointer(output->convV);
+#if USE_ISP_SW == 1
+	      ConvertMb32420ToNv21Y(mapped_dataY,mapped_convY,width*16, height*16);
+	      ConvertMb32420ToNv21C(mapped_dataU,mapped_convUV,width*16, height*16);
+#endif
+#if USE_XY_CONV == 1
+              char *xy_mappedY = (char*)malloc(cedarv_getSize(output->convY));
+              ConvertToNv21Y(mapped_dataY, xy_mappedY, width*16, height*16);
+              fp = fopen("/tmp/ump_mpeg4_xyconvY", "w");
+              sizeY = cedarv_getSize(output->convY);
+              fwrite(xy_mappedY, 1, sizeY, fp);
+              fclose(fp);
+              free(xy_mappedY);
+
+              char *xy_mappedUV = (char*)malloc(cedarv_getSize(output->convUV));
+              ConvertToNv21C(mapped_dataU, xy_mappedUV, width*16/2, height*16/2);
+              fp = fopen("/tmp/ump_mpeg4_xyconvUV", "w");
+              sizeY = cedarv_getSize(output->convUV);
+              fwrite(xy_mappedUV, 1, sizeY, fp);
+              fclose(fp);
+              free(xy_mappedUV);
+#endif
+#if USE_DISP_HW == 1
+              vedisp_init();
+              vedisp_convertMb2Yuv420(decoder_p->mpeg4VolHdr.video_object_layer_width, 
+                                      decoder_p->mpeg4VolHdr.video_object_layer_height, 
+                                      output->dataY, output->dataU, output->convY, output->convU, output->convV);
+#endif
+	      fp = fopen("/tmp/ump_mpeg4_convY", "w");
+//	      sizeY = cedarv_getSize(output->convY);
+              sizeY = decoder_p->mpeg4VolHdr.video_object_layer_width * decoder_p->mpeg4VolHdr.video_object_layer_height;
+	      fwrite(mapped_convY, 1, sizeY, fp);
+	      fclose(fp);
+	      
+	      fp = fopen("/tmp/ump_mpeg4_convU", "w");
+//	      sizeY = cedarv_getSize(output->convU);
+              sizeY = decoder_p->mpeg4VolHdr.video_object_layer_width/2 * decoder_p->mpeg4VolHdr.video_object_layer_height/2;
+              fwrite(mapped_convU, 1, sizeY, fp);
+	      fclose(fp);
+	    
+              fp = fopen("/tmp/ump_mpeg4_convV", "w");
+//              sizeY = cedarv_getSize(output->convV);
+              sizeY = decoder_p->mpeg4VolHdr.video_object_layer_width/2 * decoder_p->mpeg4VolHdr.video_object_layer_height/2;
+              fwrite(mapped_convV, 1, sizeY, fp);
+              fclose(fp);
+            }
+	    else if (image_saved=250)
+	    {
+	      void *mapped_dataY = cedarv_getPointer(output->dataY);
+	      void* mapped_dataU = cedarv_getPointer(output->dataU);
+	      void * mapped_convY = cedarv_getPointer(output->convY);
+	      void* mapped_convUV = cedarv_getPointer(output->convU);
+#if USE_ISP_SW == 1
+	      ConvertMb32420ToNv21Y(mapped_dataY,mapped_convY,width*16, height*16);
+	      ConvertMb32420ToNv21C(mapped_dataU,mapped_convUV,width*16, height*16);
+#endif
+	      
+	      FILE *fp = fopen("/tmp/ump_mpeg4_convY_250", "w");
+	      int sizeY = cedarv_getSize(output->convY);
+	      fwrite(mapped_convY, 1, sizeY, fp);
+	      fclose(fp);
+	      
+	      fp = fopen("/tmp/ump_mpeg4_convUV_250", "w");
+	      sizeY = cedarv_getSize(output->convU);
+	      fwrite(mapped_convUV, 1, sizeY, fp);
+	      fclose(fp);
+	    }
+	    image_saved++;
+#else
+#if USE_DISP_HW == 1
+            vedisp_init();
+            vedisp_convertMb2Yuv420(decoder_p->mpeg4VolHdr.video_object_layer_width, 
+                                       decoder_p->mpeg4VolHdr.video_object_layer_height, 
+                                       output->dataY, output->dataU, output->convY, output->convU, output->convV);
+            //usleep(10000);
+
+#endif
+
+#if USE_ISP_SW == 1
+            void *mapped_dataY = cedarv_getPointer(output->dataY);
+            void* mapped_dataU = cedarv_getPointer(output->dataU);
+            void * mapped_convY = cedarv_getPointer(output->convY);
+            void* mapped_convUV = cedarv_getPointer(output->convUV);
+            ConvertMb32420ToNv21Y(mapped_dataY,mapped_convY,width*16, height*16);
+            ConvertMb32420ToNv21C(mapped_dataU,mapped_convUV,width*16, height*16);
+#endif
+#endif
+#endif
     	}
 	return VDP_STATUS_OK;
 }
@@ -1871,16 +2062,16 @@ VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder)
 	int width = ((decoder->width + 15) / 16);
 	int height = ((decoder->height + 15) / 16);
 
-	decoder_p->mbh_buffer = ve_malloc(height * 2048);
-	if (! ve_isValid(decoder_p->mbh_buffer))
+	decoder_p->mbh_buffer = cedarv_malloc(height * 2048);
+	if (! cedarv_isValid(decoder_p->mbh_buffer))
 		goto err_mbh;
 
-	decoder_p->dcac_buffer = ve_malloc(width * height * 2);
-	if (! ve_isValid(decoder_p->dcac_buffer))
+	decoder_p->dcac_buffer = cedarv_malloc(width * height * 2);
+	if (! cedarv_isValid(decoder_p->dcac_buffer))
 		goto err_dcac;
 
-	decoder_p->ncf_buffer = ve_malloc(4 * 1024);
-	if (! ve_isValid(decoder_p->ncf_buffer))
+	decoder_p->ncf_buffer = cedarv_malloc(4 * 1024);
+	if (! cedarv_isValid(decoder_p->ncf_buffer))
 		goto err_ncf;
 
 	decoder->decode = mpeg4_decode;
@@ -1893,9 +2084,9 @@ VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder)
 	return VDP_STATUS_OK;
 
 err_ncf:
-	ve_free(decoder_p->dcac_buffer);
+	cedarv_free(decoder_p->dcac_buffer);
 err_dcac:
-	ve_free(decoder_p->mbh_buffer);
+	cedarv_free(decoder_p->mbh_buffer);
 err_mbh:
 	free(decoder_p);
 err_priv:

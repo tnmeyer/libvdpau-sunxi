@@ -26,7 +26,7 @@ VdpStatus vdp_bitmap_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	bitmap_surface_ctx_t *out = handle_create(sizeof(*out), surface);
+	bitmap_surface_ctx_t *out = handle_create(sizeof(*out), surface, htype_bitmap);
 	if (!out)
 		return VDP_STATUS_RESOURCES;
 

@@ -78,89 +78,128 @@ struct memchunk_t
 	struct memchunk_t *next;
 };
 
-static struct
+static struct ve_dev
 {
 	int fd;
 	void *regs;
 	int version;
+#if USE_UMP == 0
 	struct memchunk_t first_memchunk;
 	pthread_rwlock_t memory_lock;
+#endif
 	pthread_mutex_t device_lock;
-} ve = { .fd = -1, .memory_lock = PTHREAD_RWLOCK_INITIALIZER, .device_lock = PTHREAD_MUTEX_INITIALIZER };
+        int initialized;
+        unsigned int refCnt;
+} ve = { .fd = -1, 
+#if USE_UMP == 0
+	.memory_lock = PTHREAD_RWLOCK_INITIALIZER, 
+#endif
+        .device_lock = PTHREAD_MUTEX_INITIALIZER,
+        .initialized = 0,
+        .refCnt = 0
+};
 
-int ve_open(void)
+int cedarv_open(void)
 {
-	if (ve.fd != -1)
-		return 0;
+        if (pthread_mutex_lock(&ve.device_lock))
+                return 0;
+        if(ve.initialized == 0)
+        {
+             if (ve.fd != -1)
+             {
+		 printf("ve.fd != -1\n");
+		 return 0;
+             }
 
-	struct ve_info info;
+             struct ve_info info;
 
-	ve.fd = open(DEVICE, O_RDWR);
-	if (ve.fd == -1)
-		return 0;
+             ve.fd = open(DEVICE, O_RDWR);
+	     if (ve.fd == -1)
+             {
+		 printf("could not open %s\n", DEVICE);
+		 return 0;
+	     }
 
-	if (ioctl(ve.fd, IOCTL_GET_ENV_INFO, (void *)(&info)) == -1)
-		goto err;
+	     if (ioctl(ve.fd, IOCTL_GET_ENV_INFO, (void *)(&info)) == -1)
+	     {
+		 printf("ioctl get_env_info failed!\n");
+		 goto err;
+	     }
 
-	ve.regs = mmap(NULL, 0x800, PROT_READ | PROT_WRITE, MAP_SHARED, ve.fd, info.registers);
-	if (ve.regs == MAP_FAILED)
-		goto err;
+	     ve.regs = mmap(NULL, 0x800, PROT_READ | PROT_WRITE, MAP_SHARED, ve.fd, info.registers);
+	     if (ve.regs == MAP_FAILED)
+	     {
+		 printf("mmap failed!\n");
+		 goto err;
+	     }
+#if USE_UMP == 0
+	     ve.first_memchunk.phys_addr = info.reserved_mem - PAGE_OFFSET;
+	     ve.first_memchunk.size = info.reserved_mem_size;
+#endif
 
-	ve.first_memchunk.phys_addr = info.reserved_mem - PAGE_OFFSET;
-	ve.first_memchunk.size = info.reserved_mem_size;
-        
-        VALGRIND_PRINTF("regs base addreess=%p\n", ve.regs);
-        printf("regs base address=%p\n", ve.regs);
+             VALGRIND_PRINTF("regs base addreess=%p\n", ve.regs);
 
-        AMMT_SET_REGS_BASE(ve.regs);
+             AMMT_SET_REGS_BASE(ve.regs);
 
-	ioctl(ve.fd, IOCTL_ENGINE_REQ, 0);
-	ioctl(ve.fd, IOCTL_ENABLE_VE, 0);
-	ioctl(ve.fd, IOCTL_SET_VE_FREQ, 320);
-	ioctl(ve.fd, IOCTL_RESET_VE, 0);
+	     ioctl(ve.fd, IOCTL_ENGINE_REQ, 0);
+             ioctl(ve.fd, IOCTL_ENABLE_VE, 0);
+	     ioctl(ve.fd, IOCTL_SET_VE_FREQ, 320);
+	     ioctl(ve.fd, IOCTL_RESET_VE, 0);
 
-	writel(0x00130007, ve.regs + VE_CTRL);
+	     writel(0x00130007, ve.regs + CEDARV_CTRL);
 
-	ve.version = readl(ve.regs + VE_VERSION) >> 16;
-	printf("[VDPAU SUNXI] VE version 0x%04x opened.\n", ve.version);
+	     ve.version = readl(ve.regs + CEDARV_VERSION) >> 16;
 
 #if USE_UMP
-	if(ump_open() != UMP_OK)
-	  goto err;
+	     if(ump_open() != UMP_OK)
+	     {
+                  printf("ump_open failed!\n");
+	          goto err;
+	     }
 #endif
-	
+             ve.initialized = 1;
+        }
+        ve.refCnt ++;
+
+        pthread_mutex_unlock(&ve.device_lock);
 	return 1;
 
 err:
 	close(ve.fd);
 	ve.fd = -1;
+        pthread_mutex_unlock(&ve.device_lock);
+
 	return 0;
 }
 
-void ve_close(void)
+void cedarv_close(void)
 {
-	if (ve.fd == -1)
+        if(ve.initialized && --ve.refCnt == 0)
+        {
+	    if (ve.fd == -1)
 		return;
 
-	ioctl(ve.fd, IOCTL_DISABLE_VE, 0);
-	ioctl(ve.fd, IOCTL_ENGINE_REL, 0);
+            ioctl(ve.fd, IOCTL_DISABLE_VE, 0);
+	    ioctl(ve.fd, IOCTL_ENGINE_REL, 0);
 
-	munmap(ve.regs, 0x800);
-	ve.regs = NULL;
+	    munmap(ve.regs, 0x800);
+	    ve.regs = NULL;
 
-	close(ve.fd);
-	ve.fd = -1;
+	    close(ve.fd);
+	    ve.fd = -1;
 #if USE_UMP
-	ump_close();
+	    ump_close();
 #endif
+            ve.initialized = 0;
+        }
 }
 
-int ve_get_version(void)
+int cedarv_get_version(void)
 {
 	return ve.version;
 }
 
-int ve_wait(int timeout)
+int cedarv_wait(int timeout)
 {
 	if (ve.fd == -1)
 		return 0;
@@ -168,31 +207,31 @@ int ve_wait(int timeout)
 	return ioctl(ve.fd, IOCTL_WAIT_VE, timeout);
 }
 
-void *ve_get(int engine, uint32_t flags)
+void *cedarv_get(int engine, uint32_t flags)
 {
 	if (pthread_mutex_lock(&ve.device_lock))
 		return NULL;
 
-	writel(0x00130000 | (engine & 0xf) | (flags & ~0xf), ve.regs + VE_CTRL);
+	writel(0x00130000 | (engine & 0xf) | (flags & ~0xf), ve.regs + CEDARV_CTRL);
 
 	return ve.regs;
 }
 
-void ve_put(void)
+void cedarv_put(void)
 {
-	writel(0x00130007, ve.regs + VE_CTRL);
+	writel(0x00130007, ve.regs + CEDARV_CTRL);
 	pthread_mutex_unlock(&ve.device_lock);
 }
 
-void* ve_get_regs()
+void* cedarv_get_regs()
 {
 	return ve.regs;
 }
 #if USE_UMP
 
-VE_MEMORY ve_malloc(int size)
+CEDARV_MEMORY cedarv_malloc(int size)
 {
-  VE_MEMORY mem;
+  CEDARV_MEMORY mem;
   mem.mem_id = ump_ref_drv_allocate (size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR);
   if(mem.mem_id == UMP_INVALID_MEMORY_HANDLE)
   {
@@ -202,43 +241,53 @@ VE_MEMORY ve_malloc(int size)
   return mem;
 }
 
-int ve_isValid(VE_MEMORY mem)
+int cedarv_isValid(CEDARV_MEMORY mem)
 {
   return (mem.mem_id != UMP_INVALID_MEMORY_HANDLE);
 }
 
-void ve_free(VE_MEMORY mem)
+void cedarv_free(CEDARV_MEMORY mem)
 {
   ump_reference_release(mem.mem_id);
 }
 
-uint32_t ve_virt2phys(VE_MEMORY mem)
+uint32_t cedarv_virt2phys(CEDARV_MEMORY mem)
 {
   return (uint32_t)ump_phys_address_get(mem.mem_id);
 }
 
-void ve_flush_cache(VE_MEMORY mem, int len)
+void cedarv_flush_cache(CEDARV_MEMORY mem, int len)
 {
   ump_cpu_msync_now(mem.mem_id, UMP_MSYNC_CLEAN_AND_INVALIDATE, 0, len);
 }
-void ve_memcpy(VE_MEMORY dst, size_t offset, const void * src, size_t len)
+void cedarv_memcpy(CEDARV_MEMORY dst, size_t offset, const void * src, size_t len)
 {
   ump_write(dst.mem_id, offset, src, len);
 }
-void* ve_getPointer(VE_MEMORY mem)
+void* cedarv_getPointer(CEDARV_MEMORY mem)
 {
   return ump_mapped_pointer_get(mem.mem_id);
 }
 
-unsigned char ve_byteAccess(VE_MEMORY mem, size_t offset)
+unsigned char cedarv_byteAccess(CEDARV_MEMORY mem, size_t offset)
 {
   char *ptr = (char*)ump_mapped_pointer_get(mem.mem_id);
   return ptr[offset];
 }
 
+size_t cedarv_getSize(CEDARV_MEMORY mem)
+{
+  return ump_size_get(mem.mem_id);
+}
+
+void cedarv_setBufferInvalid(CEDARV_MEMORY mem)
+{
+  mem.mem_id = UMP_INVALID_MEMORY_HANDLE;
+}
+
 #else
 
-void *ve_malloc(int size)
+void *cedarv_malloc(int size)
 {
 	if (ve.fd == -1)
 		return NULL;
@@ -292,11 +341,11 @@ out:
 	return addr;
 }
 
-int ve_isValid(void* mem)
+int cedarv_isValid(void* mem)
 {
   return mem != NULL;
 }
-void ve_free(void *ptr)
+void cedarv_free(void *ptr)
 {
 	if (ve.fd == -1)
 		return;
@@ -335,7 +384,7 @@ void ve_free(void *ptr)
 	pthread_rwlock_unlock(&ve.memory_lock);
 }
 
-uint32_t ve_virt2phys(void *ptr)
+uint32_t cedarv_virt2phys(void *ptr)
 {
 	if (ve.fd == -1)
 		return 0;
@@ -367,7 +416,7 @@ uint32_t ve_virt2phys(void *ptr)
 	return addr;
 }
 
-void ve_flush_cache(void *start, int len)
+void cedarv_flush_cache(void *start, int len)
 {
 	if (ve.fd == -1)
 		return;
@@ -381,31 +430,25 @@ void ve_flush_cache(void *start, int len)
 	ioctl(ve.fd, IOCTL_FLUSH_CACHE, (void*)(&range));
 }
 
-/*
-void *ve_add2(void *val1, void* val2)
-{
-	return val1 + val2;
-}
-
-void *ve_add3(void *val1, void* val2, void *val3)
-{
-	return val1 + val2 + val3;
-}
-*/
-void ve_memcpy(void* dst, size_t offset, const void * src, size_t len)
+void cedarv_memcpy(void* dst, size_t offset, const void * src, size_t len)
 {
 	memcpy((char*)dst + offset, src, len);
 }
 
-void* ve_getPointer(VE_MEMORY mem)
+void* cedarv_getPointer(CEDARV_MEMORY mem)
 {
   return mem;
 }
 
-unsigned char ve_byteAccess(VE_MEMORY mem, size_t offset)
+unsigned char cedarv_byteAccess(void* mem, size_t offset)
 {
   char *ptr = (char*)mem;
   return ptr[offset];
+}
+
+void cedarv_setBufferInvalid(void* mem)
+{
+  mem = NULL;
 }
 
 #endif

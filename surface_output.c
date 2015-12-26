@@ -18,9 +18,12 @@
  */
 
 #include "vdpau_private.h"
+#include "string.h"
+#include "vdpau_private.h"
 
 VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format, uint32_t width, uint32_t height, VdpOutputSurface  *surface)
 {
+   int status = VDP_STATUS_OK;
 	if (!surface)
 		return VDP_STATUS_INVALID_POINTER;
 
@@ -31,18 +34,22 @@ VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	output_surface_ctx_t *out = handle_create(sizeof(*out), surface);
-	if (!out)
-		return VDP_STATUS_RESOURCES;
-
-	out->width = width;
-	out->height = height;
-	out->rgba_format = rgba_format;
-	out->contrast = 1.0;
-	out->saturation = 1.0;
-	out->device = dev;
-
-	return VDP_STATUS_OK;
+	output_surface_ctx_t *out = handle_create(sizeof(*out), surface, htype_output);
+	if (out)
+        {
+            memset(out, 0, sizeof(*out));
+            out->width = width;
+            out->height = height;
+            out->rgba_format = rgba_format;
+            out->contrast = 1.0;
+            out->saturation = 1.0;
+            out->device = dev;
+        }
+        else{
+            status = VDP_STATUS_RESOURCES;
+        }
+        handle_release(device);
+	return status;
 }
 
 VdpStatus vdp_output_surface_destroy(VdpOutputSurface surface)
@@ -51,7 +58,10 @@ VdpStatus vdp_output_surface_destroy(VdpOutputSurface surface)
 	if (!out)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	handle_destroy(surface);
+	memset(out, 0, sizeof(*out));
+	
+        handle_release(surface);
+        handle_destroy(surface);
 
 	return VDP_STATUS_OK;
 }
@@ -71,6 +81,7 @@ VdpStatus vdp_output_surface_get_parameters(VdpOutputSurface surface, VdpRGBAFor
 	if (height)
 		*height = out->height;
 
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -81,7 +92,7 @@ VdpStatus vdp_output_surface_get_bits_native(VdpOutputSurface surface, VdpRect c
 		return VDP_STATUS_INVALID_HANDLE;
 
 
-
+        handle_release(surface);
 	return VDP_STATUS_ERROR;
 }
 
@@ -94,7 +105,7 @@ VdpStatus vdp_output_surface_put_bits_native(VdpOutputSurface surface, void cons
 	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
 
 
-
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -107,7 +118,7 @@ VdpStatus vdp_output_surface_put_bits_indexed(VdpOutputSurface surface, VdpIndex
 	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
 
 
-
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -120,7 +131,7 @@ VdpStatus vdp_output_surface_put_bits_y_cb_cr(VdpOutputSurface surface, VdpYCbCr
 	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
 
 
-
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -137,7 +148,8 @@ VdpStatus vdp_output_surface_render_output_surface(VdpOutputSurface destination_
 	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
 
 
-
+        handle_release(destination_surface);
+        handle_release(source_surface);
 	return VDP_STATUS_OK;
 }
 
@@ -150,7 +162,7 @@ VdpStatus vdp_output_surface_render_bitmap_surface(VdpOutputSurface destination_
 	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
 
 
-
+        handle_release(destination_surface);
 	return VDP_STATUS_OK;
 }
 
@@ -167,6 +179,8 @@ VdpStatus vdp_output_surface_query_capabilities(VdpDevice device, VdpRGBAFormat 
 	*max_width = 8192;
 	*max_height = 8192;
 
+        handle_release(device);
+        
 	return VDP_STATUS_OK;
 }
 
@@ -181,6 +195,7 @@ VdpStatus vdp_output_surface_query_get_put_bits_native_capabilities(VdpDevice de
 
 	*is_supported = VDP_FALSE;
 
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
@@ -195,6 +210,7 @@ VdpStatus vdp_output_surface_query_put_bits_indexed_capabilities(VdpDevice devic
 
 	*is_supported = VDP_FALSE;
 
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
@@ -209,5 +225,6 @@ VdpStatus vdp_output_surface_query_put_bits_y_cb_cr_capabilities(VdpDevice devic
 
 	*is_supported = VDP_FALSE;
 
+        handle_release(device);
 	return VDP_STATUS_OK;
 }

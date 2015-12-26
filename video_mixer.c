@@ -26,14 +26,15 @@ VdpStatus vdp_video_mixer_create(VdpDevice device, uint32_t feature_count, VdpVi
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	mixer_ctx_t *mix = handle_create(sizeof(*mix), mixer);
+	mixer_ctx_t *mix = handle_create(sizeof(*mix), mixer, htype_mixer);
 	if (!mix)
 		return VDP_STATUS_RESOURCES;
 
 	mix->device = dev;
 	mix->contrast = 1.0;
 	mix->saturation = 1.0;
-
+        
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
@@ -43,7 +44,8 @@ VdpStatus vdp_video_mixer_destroy(VdpVideoMixer mixer)
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	handle_destroy(mixer);
+	handle_release(mixer);
+        handle_destroy(mixer);
 
 	return VDP_STATUS_OK;
 }
@@ -93,7 +95,9 @@ VdpStatus vdp_video_mixer_render(VdpVideoMixer mixer, VdpOutputSurface backgroun
 	if (layer_count != 0)
 		VDPAU_DBG_ONCE("Requested unimplemented additional layers");
 
-
+        handle_release(mixer);
+        handle_release(destination_surface);
+        handle_release(video_surface_current);
 	return VDP_STATUS_OK;
 }
 
@@ -109,7 +113,7 @@ VdpStatus vdp_video_mixer_get_feature_support(VdpVideoMixer mixer, uint32_t feat
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-
+        handle_release(mixer);
 	return VDP_STATUS_ERROR;
 }
 
@@ -125,7 +129,7 @@ VdpStatus vdp_video_mixer_set_feature_enables(VdpVideoMixer mixer, uint32_t feat
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-
+        handle_release(mixer);
 	return VDP_STATUS_OK;
 }
 
@@ -138,7 +142,7 @@ VdpStatus vdp_video_mixer_get_feature_enables(VdpVideoMixer mixer, uint32_t feat
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-
+        handle_release(mixer);
 	return VDP_STATUS_ERROR;
 }
 
@@ -176,6 +180,7 @@ VdpStatus vdp_video_mixer_set_attribute_values(VdpVideoMixer mixer, uint32_t att
 		if (attributes[i] == VDP_VIDEO_MIXER_ATTRIBUTE_CSC_MATRIX)
 			set_csc_matrix(mix, (const VdpCSCMatrix *)attribute_values[i]);
 
+        handle_release(mixer);
 	return VDP_STATUS_OK;
 }
 
@@ -188,7 +193,7 @@ VdpStatus vdp_video_mixer_get_parameter_values(VdpVideoMixer mixer, uint32_t par
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-
+        handle_release(mixer);
 	return VDP_STATUS_ERROR;
 }
 
@@ -201,7 +206,7 @@ VdpStatus vdp_video_mixer_get_attribute_values(VdpVideoMixer mixer, uint32_t att
 	if (!mix)
 		return VDP_STATUS_INVALID_HANDLE;
 
-
+        handle_release(mixer);
 	return VDP_STATUS_ERROR;
 }
 
@@ -215,6 +220,7 @@ VdpStatus vdp_video_mixer_query_feature_support(VdpDevice device, VdpVideoMixerF
 		return VDP_STATUS_INVALID_HANDLE;
 
 	*is_supported = VDP_FALSE;
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
@@ -240,6 +246,7 @@ VdpStatus vdp_video_mixer_query_parameter_support(VdpDevice device, VdpVideoMixe
 		break;
 	}
 
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
@@ -265,6 +272,7 @@ VdpStatus vdp_video_mixer_query_parameter_value_range(VdpDevice device, VdpVideo
 		return VDP_STATUS_OK;
 	}
 
+        handle_release(device);
 	return VDP_STATUS_ERROR;
 }
 
@@ -279,11 +287,13 @@ VdpStatus vdp_video_mixer_query_attribute_support(VdpDevice device, VdpVideoMixe
 
 	*is_supported = VDP_FALSE;
 
+        handle_release(device);
 	return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_video_mixer_query_attribute_value_range(VdpDevice device, VdpVideoMixerAttribute attribute, void *min_value, void *max_value)
 {
+        int status = VDP_STATUS_ERROR;
 	if (!min_value || !max_value)
 		return VDP_STATUS_INVALID_POINTER;
 
@@ -295,27 +305,40 @@ VdpStatus vdp_video_mixer_query_attribute_value_range(VdpDevice device, VdpVideo
 	{
 	case VDP_VIDEO_MIXER_ATTRIBUTE_BACKGROUND_COLOR:
 	case VDP_VIDEO_MIXER_ATTRIBUTE_CSC_MATRIX:
-		return VDP_STATUS_ERROR;
+        {
+           status = VDP_STATUS_ERROR;
+           break;
+        }
 
 	case VDP_VIDEO_MIXER_ATTRIBUTE_LUMA_KEY_MAX_LUMA:
 	case VDP_VIDEO_MIXER_ATTRIBUTE_LUMA_KEY_MIN_LUMA:
 	case VDP_VIDEO_MIXER_ATTRIBUTE_NOISE_REDUCTION_LEVEL:
-		*(float *)min_value = 0.0;
-		*(float *)max_value = 1.0;
-		return VDP_STATUS_OK;
+        {
+           *(float *)min_value = 0.0;
+           *(float *)max_value = 1.0;
+           status = VDP_STATUS_OK;
+           break;
+        }
 
 	case VDP_VIDEO_MIXER_ATTRIBUTE_SHARPNESS_LEVEL:
+        {
 		*(float *)min_value = -1.0;
 		*(float *)max_value = 1.0;
-		return VDP_STATUS_OK;
+		status = VDP_STATUS_OK;
+                break;
+        }
 
 	case VDP_VIDEO_MIXER_ATTRIBUTE_SKIP_CHROMA_DEINTERLACE:
+        {
 		*(uint8_t *)min_value = 0;
 		*(uint8_t *)max_value = 1;
-		return VDP_STATUS_OK;
+		status = VDP_STATUS_OK;
+                break;
+        }
 	}
 
-	return VDP_STATUS_ERROR;
+        handle_release(device);
+	return status;
 }
 
 VdpStatus vdp_generate_csc_matrix(VdpProcamp *procamp, VdpColorStandard standard, VdpCSCMatrix *csc_matrix)

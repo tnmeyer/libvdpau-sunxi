@@ -21,19 +21,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include "vdpau_private.h"
+#include <stdio.h>
 
 #define INITIAL_SIZE 16
 
+struct dataVault
+{
+   void*    data;
+   uint32_t refCnt;
+   enum HandleType type;
+};
+
 static struct
 {
-	void **data;
+        struct dataVault *data;
 	size_t size;
 	pthread_rwlock_t lock;
 } ht = { .lock = PTHREAD_RWLOCK_INITIALIZER,
          .size = 0,
          .data = NULL };
 
-void *handle_create(size_t size, VdpHandle *handle)
+void *handle_create(size_t size, VdpHandle *handle, enum HandleType type)
 {
    unsigned int index;
    void *data = NULL;
@@ -43,17 +51,17 @@ void *handle_create(size_t size, VdpHandle *handle)
 		return NULL;
 
 	for (index = 0; index < ht.size; index++)
-		if (ht.data[index] == NULL)
+		if (ht.data[index].refCnt == 0)
 			break;
 
 	if (index >= ht.size)
 	{
 		int new_size = ht.size ? ht.size * 2 : INITIAL_SIZE;
-		void **new_data = realloc(ht.data, new_size * sizeof(void *));
+                struct dataVault *new_data = realloc(ht.data, new_size * sizeof(struct dataVault));
 		if (!new_data)
 			goto out;
 
-		memset(new_data + ht.size, 0, (new_size - ht.size) * sizeof(void *));
+		memset(new_data + ht.size, 0, (new_size - ht.size) * sizeof(struct dataVault));
 		ht.data = new_data;
 		ht.size = new_size;
 	}
@@ -62,7 +70,9 @@ void *handle_create(size_t size, VdpHandle *handle)
 	if (!data)
 		goto out;
 
-	ht.data[index] = data;
+	ht.data[index].data = data;
+        ht.data[index].refCnt = 1;
+        ht.data[index].type = type;
 	*handle = index + 1;
 
 out:
@@ -80,8 +90,12 @@ void *handle_get(VdpHandle handle)
 	if (pthread_rwlock_rdlock(&ht.lock))
 		return NULL;
 
-        if (index >= 0 && index < ht.size)
-		data = ht.data[index];
+        if (index >= 0 && index < ht.size && ht.data[index].refCnt > 0)
+        {
+		data = ht.data[index].data;
+                if(data)
+                    ht.data[index].refCnt++;
+        }
 
 	pthread_rwlock_unlock(&ht.lock);
 	return data;
@@ -89,7 +103,7 @@ void *handle_get(VdpHandle handle)
 
 void handle_destroy(VdpHandle handle)
 {
-   unsigned int index = handle - 1;
+   int index = handle - 1;
    if (pthread_rwlock_wrlock(&ht.lock))
 		return;
 
@@ -97,19 +111,34 @@ void handle_destroy(VdpHandle handle)
 	if (index >= 0 && index < ht.size)
 	{
 #if 1	
-           free(ht.data[index]);
+           if(ht.data[index].refCnt > 0)
+           {
+              ht.data[index].refCnt--;
+              if(ht.data[index].refCnt == 0 && ht.data[index].data)
+              {
+                 free(ht.data[index].data);
+                 ht.data[index].data = NULL;
+              }
+           }
 #endif
-		ht.data[index] = NULL;
 	}
-
+        else
+        {
+           printf("wrong handle %X\n", handle);
+        }
 	pthread_rwlock_unlock(&ht.lock);
 }
+void handle_release (VdpHandle handle)
+{
+   handle_destroy(handle);
+}
+
 void handles_print()
 {
 	int i;
 	for(i=0; i < ht.size; ++i)
 	{
-		printf("handle %d=%X\n", i+1, ht.data[i]);
+		printf("handle %d=%p\n", i+1, ht.data[i].data);
 	}
 
 }

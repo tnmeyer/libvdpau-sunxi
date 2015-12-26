@@ -47,14 +47,18 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     if (!dev)
         return VDP_STATUS_INVALID_HANDLE;
 
-    queue_target_ctx_t *qt = handle_create(sizeof(*qt), target);
+    queue_target_ctx_t *qt = handle_create(sizeof(*qt), target, htype_presentation_target);
     if (!qt)
+    {
+        handle_release(device);
         return VDP_STATUS_RESOURCES;
+    }
 
     qt->drawable = drawable;
     qt->fd = open("/dev/disp", O_RDWR);
     if (qt->fd == -1)
     {
+        handle_release(device);
         handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
@@ -63,6 +67,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     if (dev->fb_fd == -1)
     {
         close(qt->fd);
+        handle_release(device);
         handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
@@ -72,6 +77,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
         close(qt->fd);
         close(dev->fb_fd);
+        handle_release(device);
         handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
@@ -80,6 +86,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
         close(qt->fd);
         close(dev->fb_fd);
+        handle_release(device);
         handle_destroy(*target);
         return VDP_STATUS_ERROR;
     }
@@ -101,6 +108,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
     {
             close(qt->fd);
             close(dev->fb_fd);
+            handle_release(device);
             handle_destroy(*target);
             return VDP_STATUS_RESOURCES;
     }
@@ -218,6 +226,7 @@ VdpStatus vdp_presentation_queue_target_create_x11(VdpDevice device, Drawable dr
 #endif
     printf("vdpau presentation target queue=%d created\n", *target);
 
+    handle_release(device);
     return VDP_STATUS_OK;
 }
 
@@ -233,6 +242,7 @@ VdpStatus vdp_presentation_queue_target_destroy(VdpPresentationQueueTarget prese
 
 	close(qt->fd);
 
+        handle_release(presentation_queue_target);
 	handle_destroy(presentation_queue_target);
 
         printf("vdpau presentation target queue=%d destroyed\n", presentation_queue_target);
@@ -250,15 +260,25 @@ VdpStatus vdp_presentation_queue_create(VdpDevice device, VdpPresentationQueueTa
 
 	queue_target_ctx_t *qt = handle_get(presentation_queue_target);
 	if (!qt)
+        {
+                handle_release(device);
 		return VDP_STATUS_INVALID_HANDLE;
+        }
 
-	queue_ctx_t *q = handle_create(sizeof(*q), presentation_queue);
+	queue_ctx_t *q = handle_create(sizeof(*q), presentation_queue, htype_presentation);
 	if (!q)
+        {
+                handle_release(device);
+                handle_release(presentation_queue_target);
 		return VDP_STATUS_RESOURCES;
+        }
 
-	q->target = qt;
+	//keep refcnt from handle_get increased, decrease when destroying the presentation queue
+        q->target = qt;
 	q->device = dev;
-
+        q->target_hdl = presentation_queue_target;
+        q->device_hdl = device;
+        
         printf("vdpau presentation queue=%d created\n", *presentation_queue);
 
         return VDP_STATUS_OK;
@@ -270,6 +290,9 @@ VdpStatus vdp_presentation_queue_destroy(VdpPresentationQueue presentation_queue
 	if (!q)
 		return VDP_STATUS_INVALID_HANDLE;
 
+        handle_release(q->target_hdl);
+        handle_release(q->device_hdl);
+        handle_release(presentation_queue);
 	handle_destroy(presentation_queue);
 
         printf("vdpau presentation queue=%d destroyed\n", presentation_queue);
@@ -290,7 +313,8 @@ VdpStatus vdp_presentation_queue_set_background_color(VdpPresentationQueue prese
 	q->background.blue = background_color->blue;
 	q->background.alpha = background_color->alpha;
 
-	return VDP_STATUS_OK;
+	handle_release(presentation_queue);
+        return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_presentation_queue_get_background_color(VdpPresentationQueue presentation_queue, VdpColor *const background_color)
@@ -307,6 +331,7 @@ VdpStatus vdp_presentation_queue_get_background_color(VdpPresentationQueue prese
 	background_color->blue = q->background.blue;
 	background_color->alpha = q->background.alpha;
 
+        handle_release(presentation_queue);
 	return VDP_STATUS_OK;
 }
 
@@ -317,6 +342,7 @@ VdpStatus vdp_presentation_queue_get_time(VdpPresentationQueue presentation_queu
 		return VDP_STATUS_INVALID_HANDLE;
 
 	*current_time = get_time();
+        handle_release(presentation_queue);
 	return VDP_STATUS_OK;
 }
 
@@ -330,12 +356,17 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 
 	output_surface_ctx_t *os = handle_get(surface);
 	if (!os)
+        {
+                handle_release(presentation_queue);
 		return VDP_STATUS_INVALID_HANDLE;
+        }
 
 	if (!(os->vs))
 	{
 		printf("trying to display empty surface\n");
 		VDPAU_DBG("trying to display empty surface");
+                handle_release(presentation_queue);
+                handle_release(surface);
 		return VDP_STATUS_OK;
 	}
 
@@ -381,11 +412,13 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 		layer_info.fb.mode = DISP_MOD_MB_UV_COMBINED;
 		break;
 	}
+	
 	layer_info.fb.br_swap = 0;
 	//recalc data to cpu kernel addresses (+ 0x40000000)
-	layer_info.fb.addr[0] = ve_virt2phys(os->vs->data) + 0x40000000;
-	layer_info.fb.addr[1] = ve_virt2phys(os->vs->data) + os->vs->plane_size + 0x40000000;
-	layer_info.fb.addr[2] = ve_virt2phys(os->vs->data) + os->vs->plane_size + os->vs->plane_size / 4 + 0x40000000;
+	layer_info.fb.addr[0] = cedarv_virt2phys(os->vs->dataY) + 0x40000000;
+	layer_info.fb.addr[1] = cedarv_virt2phys(os->vs->dataU)/* + os->vs->plane_size*/ + 0x40000000;
+	if( cedarv_isValid(os->vs->dataV))
+	  layer_info.fb.addr[2] = cedarv_virt2phys(os->vs->dataV)/* + os->vs->plane_size + os->vs->plane_size / 4*/ + 0x40000000;
 
 	layer_info.fb.cs_mode = DISP_BT709;
 	layer_info.fb.size.width = os->vs->width; //q->target->screen_width;
@@ -452,6 +485,8 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 		os->csc_change = 0;
 	}
 
+        handle_release(presentation_queue);
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -463,10 +498,15 @@ VdpStatus vdp_presentation_queue_block_until_surface_idle(VdpPresentationQueue p
 
 	output_surface_ctx_t *out = handle_get(surface);
 	if (!out)
+        {
+                handle_release(presentation_queue);
 		return VDP_STATUS_INVALID_HANDLE;
+        }
 
 	*first_presentation_time = get_time();
 
+        handle_release(presentation_queue);
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }
 
@@ -478,10 +518,15 @@ VdpStatus vdp_presentation_queue_query_surface_status(VdpPresentationQueue prese
 
 	output_surface_ctx_t *out = handle_get(surface);
 	if (!out)
+        {
+                handle_release(presentation_queue);
 		return VDP_STATUS_INVALID_HANDLE;
+        }
 
 	*status = VDP_PRESENTATION_QUEUE_STATUS_VISIBLE;
 	*first_presentation_time = get_time();
 
+        handle_release(presentation_queue);
+        handle_release(surface);
 	return VDP_STATUS_OK;
 }

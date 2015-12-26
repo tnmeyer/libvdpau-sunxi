@@ -31,19 +31,20 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
     if (max_references > 16)
         return VDP_STATUS_ERROR;
 
-    decoder_ctx_t *dec = handle_create(sizeof(*dec), decoder);
+    decoder_ctx_t *dec = handle_create(sizeof(*dec), decoder, htype_decoder);
     if (!dec)
         goto err_ctx;
+    
+    VDPAU_DBG("vdpau decoder=%d created", *decoder);
 
-    printf("vdpau decoder=%d created\n", *decoder);
     memset(dec, 0, sizeof(*dec));
     dec->device = dev;
     dec->profile = profile;
     dec->width = width;
     dec->height = height;
 
-    dec->data = ve_malloc(VBV_SIZE);
-    if (! ve_isValid(dec->data))
+    dec->data = cedarv_malloc(VBV_SIZE);
+    if (! cedarv_isValid(dec->data))
         goto err_data;
     dec->data_pos = 0;
 
@@ -85,22 +86,24 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
     if (ret != VDP_STATUS_OK)
         goto err_decoder;
 
+    handle_release(device);
     return VDP_STATUS_OK;
 
 err_handle:
     if (dec->private_free)
         dec->private_free(dec);
 err_decoder:
-    ve_free(dec->data);
+    cedarv_free(dec->data);
 err_data:
     handle_destroy(*decoder);
 err_ctx:
+    handle_release(device);
     return VDP_STATUS_RESOURCES;
 }
 
 VdpStatus vdp_decoder_destroy(VdpDecoder decoder)
 {
-    printf("vdpau decoder=%d destroyed\n", decoder);
+    VDPAU_DBG("vdpau decoder=%d destroyed", decoder);
     decoder_ctx_t *dec = handle_get(decoder);
     if (!dec)
         return VDP_STATUS_INVALID_HANDLE;
@@ -108,8 +111,9 @@ VdpStatus vdp_decoder_destroy(VdpDecoder decoder)
     if (dec->private_free)
         dec->private_free(dec);
 
-    ve_free(dec->data);
+    cedarv_free(dec->data);
 
+    handle_release(decoder);
     handle_destroy(decoder);
 
     return VDP_STATUS_OK;
@@ -129,32 +133,42 @@ VdpStatus vdp_decoder_get_parameters(VdpDecoder decoder, VdpDecoderProfile *prof
 
     if (height)
         *height = dec->height;
+    
+    handle_release(decoder);
 
     return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_decoder_render(VdpDecoder decoder, VdpVideoSurface target, VdpPictureInfo const *picture_info, uint32_t bitstream_buffer_count, VdpBitstreamBuffer const *bitstream_buffers)
 {
+    VdpStatus status = VDP_STATUS_INVALID_HANDLE;
     decoder_ctx_t *dec = handle_get(decoder);
     if (!dec)
         return VDP_STATUS_INVALID_HANDLE;
 
     video_surface_ctx_t *vid = handle_get(target);
     if (!vid)
+    {
+        handle_release(decoder);
         return VDP_STATUS_INVALID_HANDLE;
+    }
 
     vid->source_format = INTERNAL_YCBCR_FORMAT;
     unsigned int i, pos = 0;
 
     for (i = 0; i < bitstream_buffer_count; i++)
     {
-        ve_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
+        cedarv_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
         pos += bitstream_buffers[i].bitstream_bytes;
     }
     //memory is mapped unchached, therefore no flush necessary. hopefully ;)
-    ve_flush_cache(dec->data, pos);
+    cedarv_flush_cache(dec->data, pos);
 
-    return dec->decode(dec, picture_info, pos, vid);
+    status = dec->decode(dec, picture_info, pos, vid);
+
+    handle_release(target);
+    handle_release(decoder);
+    return status;
 }
 
 VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile profile, VdpBool *is_supported, uint32_t *max_level, uint32_t *max_macroblocks, uint32_t *max_width, uint32_t *max_height)
@@ -195,16 +209,22 @@ VdpStatus vdp_decoder_query_capabilities(VdpDevice device, VdpDecoderProfile pro
         break;
     }
 
+    handle_release(device);
     return VDP_STATUS_OK;
 }
 
 VdpStatus vdp_decoder_set_video_control_data(VdpDecoder decoder, VdpDecoderControlDataId id, VdpDecoderControlData *data)
 {
+    VdpStatus status = VDP_STATUS_OK; 
     decoder_ctx_t *dec = handle_get(decoder);
     if (!dec)
         return VDP_STATUS_INVALID_HANDLE;
     if (dec->setVideoControlData)
-        return dec->setVideoControlData(dec, id, data);
+    {
+        status = dec->setVideoControlData(dec, id, data);
+    }
+    handle_release(decoder);
+    return status;
 }
 
 #if 1
@@ -223,11 +243,11 @@ VdpStatus vdp_decoder_render_stream(VdpDecoder decoder, VdpVideoSurface target, 
 
 	for (i = 0; i < bitstream_buffer_count; i++)
 	{
-		ve_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
+		cedarv_memcpy(dec->data, pos, bitstream_buffers[i].bitstream, bitstream_buffers[i].bitstream_bytes);
 		pos += bitstream_buffers[i].bitstream_bytes;
 	}
 	//memory is mapped unchached, therefore no flush necessary. hopefully ;)
-	ve_flush_cache(dec->data, pos);
+	cedarv_flush_cache(dec->data, pos);
 
 	int error = dec->decode_stream(dec, picture_info, pos, vid, bitstream_pos_returned);
 	if(error)

@@ -20,7 +20,7 @@
 #ifndef __VDPAU_PRIVATE_H__
 #define __VDPAU_PRIVATE_H__
 
-#define DEBUG
+//#define DEBUG
 #define MAX_HANDLES 64
 #define VBV_SIZE (1 * 1024 * 1024)
 
@@ -31,6 +31,29 @@
 #include "ve.h"
 
 #define INTERNAL_YCBCR_FORMAT (VdpYCbCrFormat)0xffff
+
+typedef uint32_t VdpHandle;
+
+
+enum HandleType
+{
+   htype_output,
+   htype_video,
+   htype_bitmap,
+   htype_mixer,
+   htype_device,
+   htype_decoder,
+   htype_presentation,
+   htype_presentation_target,
+   htype_nvidia_vdpau
+};
+
+enum VdpauNVState
+{
+  VdpauNVState_Unregistered	= 0,
+  VdpauNVState_Registered,
+  VdpauNVState_Mapped
+};
 
 typedef struct
 {
@@ -50,9 +73,19 @@ typedef struct video_surface_ctx_struct
 {
 	device_ctx_t *device;
 	uint32_t width, height;
+	uint32_t stride_width;
+	uint32_t stride_height;
+	uint32_t conv_width;
+	uint32_t conv_height;
 	VdpChromaType chroma_type;
 	VdpYCbCrFormat source_format;
-	VE_MEMORY data;
+	CEDARV_MEMORY dataY;
+	CEDARV_MEMORY dataU;
+	CEDARV_MEMORY dataV;
+	CEDARV_MEMORY convY;
+	CEDARV_MEMORY convU;
+	CEDARV_MEMORY convV;
+	enum VdpauNVState vdpNvState;
 	int plane_size;
 	void *decoder_private;
 	void (*decoder_private_free)(struct video_surface_ctx_struct *surface);
@@ -62,7 +95,7 @@ typedef struct decoder_ctx_struct
 {
 	uint32_t width, height;
 	VdpDecoderProfile profile;
-	VE_MEMORY data;
+	CEDARV_MEMORY data;
 	unsigned int data_pos;
 	device_ctx_t *device;
 	VdpStatus (*decode)(struct decoder_ctx_struct *decoder, VdpPictureInfo const *info, const int len, video_surface_ctx_t *output);
@@ -84,8 +117,10 @@ typedef struct
 typedef struct
 {
 	queue_target_ctx_t *target;
+        VdpHandle target_hdl;
 	VdpColor background;
 	device_ctx_t *device;
+        VdpHandle device_hdl;
 } queue_ctx_t;
 
 typedef struct
@@ -110,6 +145,7 @@ typedef struct
 	float contrast;
 	float saturation;
 	float hue;
+	enum VdpauNVState vdpNvState;
 } output_surface_ctx_t;
 
 #ifndef ARRAY_SIZE
@@ -130,11 +166,10 @@ VdpStatus new_decoder_h264(decoder_ctx_t *decoder);
 VdpStatus new_decoder_mpeg4(decoder_ctx_t *decoder);
 VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder);
 
-typedef uint32_t VdpHandle;
-
-void *handle_create(size_t size, VdpHandle *handle);
+void *handle_create(size_t size, VdpHandle *handle, enum HandleType type);
 void *handle_get(VdpHandle handle);
 void handle_destroy(VdpHandle handle);
+void handle_release(VdpHandle handle);
 
 VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device, VdpGetProcAddress **get_proc_address);
 VdpStatus vdp_device_destroy(VdpDevice device);

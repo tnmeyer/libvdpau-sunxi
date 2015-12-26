@@ -24,6 +24,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <stdlib.h>
 
 VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device, VdpGetProcAddress **get_proc_address)
 {
@@ -32,7 +33,7 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 		return VDP_STATUS_INVALID_POINTER;
 	}
 
-	device_ctx_t *dev = handle_create(sizeof(*dev), device);
+	device_ctx_t *dev = handle_create(sizeof(*dev), device, htype_device);
 	if (!dev)
 		return VDP_STATUS_RESOURCES;
 
@@ -40,9 +41,9 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 	dev->screen = screen;
         dev->fb_id = 0;
 
-	if (!ve_open())
+	if (!cedarv_open())
 	{
-		VDPAU_DBG_ONCE("ve_open failed");
+		VDPAU_DBG_ONCE("cedarv_open failed");
 		handle_destroy(*device);
 		return VDP_STATUS_ERROR;
 	}
@@ -58,7 +59,7 @@ VdpStatus vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *dev
 	}
 
 	*get_proc_address = &vdp_get_proc_address;
-
+        
 	return VDP_STATUS_OK;
 }
 
@@ -68,9 +69,10 @@ VdpStatus vdp_device_destroy(VdpDevice device)
 	if (!dev)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	ve_close();
+	cedarv_close();
 	//XCloseDisplay(dev->display);
 
+        handle_release(device);
 	handle_destroy(device);
 
 	return VDP_STATUS_OK;
@@ -88,6 +90,8 @@ VdpStatus vdp_preemption_callback_register(VdpDevice device, VdpPreemptionCallba
 	dev->preemption_callback = callback;
 	dev->preemption_callback_context = context;
 
+        handle_release(device);
+        
 	return VDP_STATUS_OK;
 }
 
@@ -107,7 +111,7 @@ static void *const functions[] =
 	[VDP_FUNC_ID_VIDEO_SURFACE_GET_BITS_Y_CB_CR]                        = &vdp_video_surface_get_bits_y_cb_cr,
 	[VDP_FUNC_ID_VIDEO_SURFACE_PUT_BITS_Y_CB_CR]                        = &vdp_video_surface_put_bits_y_cb_cr,
 	[VDP_FUNC_ID_OUTPUT_SURFACE_QUERY_CAPABILITIES]                     = &vdp_output_surface_query_capabilities,
-	[VDP_FUNC_ID_OUTPUT_SURFACE_QUERY_GET_PUT_BITS_NATIVE_CAPABILITIES] = &vdp_output_surface_query_get_put_bits_native_capabilities,
+         [VDP_FUNC_ID_OUTPUT_SURFACE_QUERY_GET_PUT_BITS_NATIVE_CAPABILITIES] = &vdp_output_surface_query_get_put_bits_native_capabilities,
 	[VDP_FUNC_ID_OUTPUT_SURFACE_QUERY_PUT_BITS_INDEXED_CAPABILITIES]    = &vdp_output_surface_query_put_bits_indexed_capabilities,
 	[VDP_FUNC_ID_OUTPUT_SURFACE_QUERY_PUT_BITS_Y_CB_CR_CAPABILITIES]    = &vdp_output_surface_query_put_bits_y_cb_cr_capabilities,
 	[VDP_FUNC_ID_OUTPUT_SURFACE_CREATE]                                 = &vdp_output_surface_create,
@@ -160,7 +164,8 @@ static void *const functions[] =
 
 VdpStatus vdp_get_proc_address(VdpDevice device_handle, VdpFuncId function_id, void **function_pointer)
 {
-	if (!function_pointer)
+        VdpStatus status;
+        if (!function_pointer)
 		return VDP_STATUS_INVALID_POINTER;
 
 	device_ctx_t *device = handle_get(device_handle);
@@ -171,18 +176,21 @@ VdpStatus vdp_get_proc_address(VdpDevice device_handle, VdpFuncId function_id, v
 	{
 		*function_pointer = functions[function_id];
 		if (*function_pointer == NULL)
-			return VDP_STATUS_INVALID_FUNC_ID;
+			status = VDP_STATUS_INVALID_FUNC_ID;
 		else
-			return VDP_STATUS_OK;
+			status = VDP_STATUS_OK;
 	}
 	else if (function_id == VDP_FUNC_ID_PRESENTATION_QUEUE_TARGET_CREATE_X11)
 	{
 		*function_pointer = &vdp_presentation_queue_target_create_x11;
 
-		return VDP_STATUS_OK;
+		status = VDP_STATUS_OK;
 	}
+        else
+           status = VDP_STATUS_INVALID_FUNC_ID;
 
-	return VDP_STATUS_INVALID_FUNC_ID;
+        handle_release(device_handle);
+	return status;
 }
 
 char const *vdp_get_error_string(VdpStatus status)

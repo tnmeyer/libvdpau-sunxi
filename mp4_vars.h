@@ -36,8 +36,9 @@
 //#include "decore.h"
 
 //#include "mp4_header.h"
-//#include "mp4_vld.h"
+#include "mp4_vld.h"
 //#include "postprocess.h"
+#include "mpeg4.h"
 
 /**
  *	macros
@@ -151,6 +152,9 @@ extern unsigned char	*edged_ref[3],
 /** 
  *	prototypes of global functions
 **/
+void save_tables (MP4_TABLES * tables);
+int blockInter(bitstream *bs, mp4_private_t *priv, int block_num, int coded);
+int blockIntra(bitstream *bs, mp4_private_t *priv, int block_num, int coded);
 
 #if 0
 int decore_init (int hor_size, int ver_size, int output_format, int time_incr, DEC_BUFFERS buffers);
@@ -159,7 +163,6 @@ int decore_release ();
 int decore_setoutput (int output_format);
 void closedecoder ();
 void initdecoder (DEC_BUFFERS buffers);
-void save_tables (MP4_TABLES * tables);
 
 void idct (short *block);
 void reconstruct (int bx, int by, int mode);

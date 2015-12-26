@@ -24,10 +24,10 @@
 
 extern uint64_t get_time();
 
-static int mpeg_find_startcode(VE_MEMORY mem, int len)
+static int mpeg_find_startcode(CEDARV_MEMORY mem, int len)
 {
 	int pos = 0;
-	uint8_t *data = ve_getPointer(mem);
+	uint8_t *data = cedarv_getPointer(mem);
 	while (pos < len)
 	{
 		int zeros = 0;
@@ -62,19 +62,19 @@ static VdpStatus mpeg12_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_in
 	int i;
 
 	// activate MPEG engine
-	void *ve_regs = ve_get(VE_ENGINE_MPEG, 0);
+	void *cedarv_regs = cedarv_get(CEDARV_ENGINE_MPEG, 0);
 
 	// set quantisation tables
 	for (i = 0; i < 64; i++)
-		writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+		writel((uint32_t)(64 + i) << 8 | info->intra_quantizer_matrix[i], cedarv_regs + CEDARV_MPEG_IQ_MIN_INPUT);
 	for (i = 0; i < 64; i++)
-		writel((uint32_t)(i) << 8 | info->non_intra_quantizer_matrix[i], ve_regs + VE_MPEG_IQ_MIN_INPUT);
+		writel((uint32_t)(i) << 8 | info->non_intra_quantizer_matrix[i], cedarv_regs + CEDARV_MPEG_IQ_MIN_INPUT);
 
 	// set size
 	uint16_t width = (decoder->width + 15) / 16;
 	uint16_t height = (decoder->height + 15) / 16;
-	writel((width << 8) | height, ve_regs + VE_MPEG_SIZE);
-	writel(((width * 16) << 16) | (height * 16), ve_regs + VE_MPEG_FRAME_SIZE);
+	writel((width << 8) | height, cedarv_regs + CEDARV_MPEG_SIZE);
+	writel(((width * 16) << 16) | (height * 16), cedarv_regs + CEDARV_MPEG_FRAME_SIZE);
 
 	// set picture header
 	uint32_t pic_header = 0;
@@ -95,63 +95,71 @@ static VdpStatus mpeg12_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_in
 	pic_header |= ((info->full_pel_backward_vector & 0x1) << 0);
 	if (decoder->profile == VDP_DECODER_PROFILE_MPEG1)
 		pic_header |= 0x000003c0;
-	writel(pic_header, ve_regs + VE_MPEG_PIC_HDR);
+	writel(pic_header, cedarv_regs + CEDARV_MPEG_PIC_HDR);
 
 	// ??
-	writel(0x800001b8, ve_regs + VE_MPEG_CTRL);
+	writel(0x800001b8, cedarv_regs + CEDARV_MPEG_CTRL);
 
 	// set forward/backward predicion buffers
 	if (info->forward_reference != VDP_INVALID_HANDLE)
 	{
 		video_surface_ctx_t *forward = handle_get(info->forward_reference);
-		writel(ve_virt2phys(forward->data), ve_regs + VE_MPEG_FWD_LUMA);
-		writel(ve_virt2phys(forward->data) + forward->plane_size, ve_regs + VE_MPEG_FWD_CHROMA);
+                if(forward)
+                {
+		   writel(cedarv_virt2phys(forward->dataY), cedarv_regs + CEDARV_MPEG_FWD_LUMA);
+		   writel(cedarv_virt2phys(forward->dataU)/* + forward->plane_size */, cedarv_regs + CEDARV_MPEG_FWD_CHROMA);
+                   handle_release(info->forward_reference);
+                }
 	}
 	if (info->backward_reference != VDP_INVALID_HANDLE)
 	{
 		video_surface_ctx_t *backward = handle_get(info->backward_reference);
-		writel(ve_virt2phys(backward->data), ve_regs + VE_MPEG_BACK_LUMA);
-		writel(ve_virt2phys(backward->data) + backward->plane_size, ve_regs + VE_MPEG_BACK_CHROMA);
+                if(backward)
+                {
+		   writel(cedarv_virt2phys(backward->dataY), cedarv_regs + CEDARV_MPEG_BACK_LUMA);
+		   writel(cedarv_virt2phys(backward->dataU)/* + backward->plane_size*/, cedarv_regs + CEDARV_MPEG_BACK_CHROMA);
+                   handle_release(info->backward_reference);
+                }
 	}
 
 	// set output buffers (Luma / Croma)
-	writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_REC_LUMA);
-	writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_REC_CHROMA);
-	writel(ve_virt2phys(output->data), ve_regs + VE_MPEG_ROT_LUMA);
-	writel(ve_virt2phys(output->data) + output->plane_size, ve_regs + VE_MPEG_ROT_CHROMA);
+	writel(cedarv_virt2phys(output->dataY), cedarv_regs + CEDARV_MPEG_REC_LUMA);
+	writel(cedarv_virt2phys(output->dataU)/* + output->plane_size*/, cedarv_regs + CEDARV_MPEG_REC_CHROMA);
+	writel(cedarv_virt2phys(output->dataY), cedarv_regs + CEDARV_MPEG_ROT_LUMA);
+	writel(cedarv_virt2phys(output->dataU)/* + output->plane_size*/, cedarv_regs + CEDARV_MPEG_ROT_CHROMA);
 
 	// set input offset in bits
-	writel(start_offset * 8, ve_regs + VE_MPEG_VLD_OFFSET);
+	writel(start_offset * 8, cedarv_regs + CEDARV_MPEG_VLD_OFFSET);
 
 	// set input length in bits
-	writel((len - start_offset) * 8, ve_regs + VE_MPEG_VLD_LEN);
+	writel((len - start_offset) * 8, cedarv_regs + CEDARV_MPEG_VLD_LEN);
 
 	// input end
-	uint32_t input_addr = ve_virt2phys(decoder->data);
-	writel(input_addr + VBV_SIZE - 1, ve_regs + VE_MPEG_VLD_END);
+	uint32_t input_addr = cedarv_virt2phys(decoder->data);
+	writel(input_addr + VBV_SIZE - 1, cedarv_regs + CEDARV_MPEG_VLD_END);
 
 	// set input buffer
-	writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), ve_regs + VE_MPEG_VLD_ADDR);
+	writel((input_addr & 0x0ffffff0) | (input_addr >> 28) | (0x7 << 28), cedarv_regs + CEDARV_MPEG_VLD_ADDR);
 
 	// trigger
-	writel((((decoder->profile == VDP_DECODER_PROFILE_MPEG1) ? 1 : 2) << 24) | 0x8000000f, ve_regs + VE_MPEG_TRIGGER);
+	writel((((decoder->profile == VDP_DECODER_PROFILE_MPEG1) ? 1 : 2) << 24) | 0x8000000f, cedarv_regs + CEDARV_MPEG_TRIGGER);
 
 	// wait for interrupt
 	++num_pics;
 uint64_t tv, tv2;
 	tv = get_time();
-	ve_wait(1);
+	cedarv_wait(1);
 	tv2 = get_time();
 	if (tv2-tv > 10000000) {
-		printf("ve_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
+		printf("cedarv_wait, longer than 10ms:%lld, pics=%ld, longs=%ld\n", tv2-tv, num_pics, ++num_longs);
 		}
 	
 
 	// clean interrupt flag
-	writel(0x0000c00f, ve_regs + VE_MPEG_STATUS);
+	writel(0x0000c00f, cedarv_regs + CEDARV_MPEG_STATUS);
 
 	// stop MPEG engine
-	ve_put();
+	cedarv_put();
 
 	return VDP_STATUS_OK;
 }
