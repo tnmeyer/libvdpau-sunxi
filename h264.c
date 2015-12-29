@@ -502,7 +502,7 @@ static void fill_frame_lists(h264_context_t *c)
 				VDPAU_DBG("NOT IMPLEMENTED: We got a longterm reference!");
 
 			video_surface_ctx_t *surface = handle_get(rf->surface);
-			if(surface)
+			if(surface && surface->frame_decoded)
 			{
 				h264_video_private_t *surface_p = (h264_video_private_t *)surface->decoder_private;
 				c->ref_frames[c->ref_count].surface = surface;
@@ -826,7 +826,7 @@ uint64_t tv, tv2;
 	//writel((readl(cedarv_regs + CEDARV_CTRL) & ~0xf) | 0x7, cedarv_regs + CEDARV_CTRL);
         cedarv_put();
 #endif
-
+        c->output->frame_decoded = 1;
 	free(c);
 	return VDP_STATUS_OK;
 }

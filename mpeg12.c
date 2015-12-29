@@ -172,7 +172,8 @@ uint64_t tv, tv2;
 
 	// stop MPEG engine
 	cedarv_put();
-
+        output->frame_decoded = 1;
+        
 	return VDP_STATUS_OK;
 }
 

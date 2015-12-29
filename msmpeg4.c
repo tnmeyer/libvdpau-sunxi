@@ -538,7 +538,10 @@ int msmpeg4_decode(decoder_ctx_t *decoder, VdpPictureInfoMPEG4Part2 const *_info
     if (error)
 	return VDP_STATUS_ERROR;
     else
+    {
+        output->frame_decoded = 1;
         return VDP_STATUS_OK;
+    }
 }
 
 VdpStatus new_decoder_msmpeg4(decoder_ctx_t *decoder)

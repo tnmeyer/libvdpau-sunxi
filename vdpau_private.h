@@ -84,6 +84,7 @@ typedef struct video_surface_ctx_struct
 	int plane_size;
 	void *decoder_private;
 	void (*decoder_private_free)(struct video_surface_ctx_struct *surface);
+        uint8_t frame_decoded;
 } video_surface_ctx_t;
 
 typedef struct decoder_ctx_struct
