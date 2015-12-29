@@ -50,14 +50,9 @@ VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, 
    vs->stride_width 	= (width + 63) & ~63;
    vs->stride_height 	= (height + 63) & ~63;
    vs->plane_size 	= vs->stride_width * vs->stride_height;
-   vs->conv_width 	= (width + 15) & ~15;
-   vs->conv_height	= (height + 15) & ~15;
    cedarv_setBufferInvalid(vs->dataY);
    cedarv_setBufferInvalid(vs->dataU);
    cedarv_setBufferInvalid(vs->dataV);
-   cedarv_setBufferInvalid(vs->convY);
-   cedarv_setBufferInvalid(vs->convU);
-   cedarv_setBufferInvalid(vs->convV);
    
    switch (chroma_type)
    {
@@ -101,17 +96,6 @@ VdpStatus vdp_video_surface_create(VdpDevice device, VdpChromaType chroma_type, 
           handle_release(device);
 	  return VDP_STATUS_RESOURCES;
       }
-      vs->convY = cedarv_malloc(vs->plane_size);
-      vs->convU = cedarv_malloc(vs->plane_size/4);
-      vs->convV = cedarv_malloc(vs->plane_size/4);
-      if (! cedarv_isValid(vs->convY) || ! cedarv_isValid(vs->convU) || ! cedarv_isValid(vs->convV))
-      {
-	  printf("vdpau video surface=%d create, failure\n", *surface);
-
-	  handle_destroy(*surface);
-          handle_release(device);
-	  return VDP_STATUS_RESOURCES;
-      }
       
       break;
    default:
@@ -139,19 +123,9 @@ VdpStatus vdp_video_surface_destroy(VdpVideoSurface surface)
 	if (cedarv_isValid(vs->dataV) )
 	  cedarv_free(vs->dataV);
 
-        if( cedarv_isValid(vs->convY) )
-           cedarv_free(vs->convY);
-        if (cedarv_isValid(vs->convU) )
-           cedarv_free(vs->convU);
-        if (cedarv_isValid(vs->convV) )
-           cedarv_free(vs->convV);
-        
         cedarv_setBufferInvalid(vs->dataY);
         cedarv_setBufferInvalid(vs->dataU);
         cedarv_setBufferInvalid(vs->dataV);
-        cedarv_setBufferInvalid(vs->convY);
-        cedarv_setBufferInvalid(vs->convU);
-        cedarv_setBufferInvalid(vs->convV);
         
         VDPAU_DBG("vdpau video surface=%d destroyed", surface);
         
