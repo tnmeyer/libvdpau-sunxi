@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define TIMEMEAS 1
+//#define TIMEMEAS 1
 
 #define USE_ISP_HW 0
 #define USE_XY_CONV 0
