@@ -48,6 +48,7 @@ void cedarv_free(CEDARV_MEMORY mem);
 uint32_t cedarv_virt2phys(CEDARV_MEMORY mem);
 void cedarv_flush_cache(CEDARV_MEMORY mem, int len);
 void cedarv_memcpy(CEDARV_MEMORY dst, size_t offset, const void * src, size_t len);
+void cedarv_memset(CEDARV_MEMORY dst, unsigned char value, size_t len);
 void* cedarv_getPointer(CEDARV_MEMORY mem);
 size_t cedarv_getSize(CEDARV_MEMORY mem);
 unsigned char cedarv_byteAccess(CEDARV_MEMORY mem, size_t offset);
@@ -74,6 +75,10 @@ static inline void writeb(uint8_t val, void *addr)
 
 #define CEDARV_CTRL				0x000
 #define CEDARV_VERSION			0x0f0
+#define CEDARV_IPD_DBLK_BUF_CTRL    0x050
+#define CEDARV_IPD_BUF              0x054
+#define CEDARV_DBLK_BUF             0x05c
+
 
 #define CEDARV_MPEG_PIC_HDR			0x100
 #define CEDARV_MPEG_VOP_HDR         0x104
@@ -139,8 +144,10 @@ static inline void writeb(uint8_t val, void *addr)
 #define CEDARV_H264_VLD_END			0x23c
 #define CEDARV_H264_SDROT_CTRL		0x240
 #define CEDARV_H264_OUTPUT_FRAME_IDX	0x24c
-#define CEDARV_H264_EXTRA_BUFFER1		0x250
-#define CEDARV_H264_EXTRA_BUFFER2		0x254
+#define CEDARV_H264_FIELD_INTRA_INFO_BUF	0x250
+#define CEDARV_H264_NEIGHBOR_INFO_BUF		0x254
+#define CEDARV_H264_MB_ADDR             0x260
+#define CEDARV_H264_ERROR           0x2b8
 #define CEDARV_H264_BASIC_BITS		0x2dc
 #define CEDARV_H264_RAM_WRITE_PTR		0x2e0
 #define CEDARV_H264_RAM_WRITE_DATA		0x2e4
@@ -188,5 +195,10 @@ static inline void writeb(uint8_t val, void *addr)
 #define CEDARV_MPEG_TRIG_ERROR_DISABLE_SIZE  0x1
 
 #define CEDARV_MPEG_TRIG_ERROR_DISABLE(er_dis)      ((err_dis & CEDARV_MPEG_TRIG_ERROR_DISABLE_SIZE) << CEDARV_MPEG_TRIG_ERROR_DISABLE_BIT)
+
+//H264 Status values
+#define VLD_BUSY                (1 << 8)
+#define VLD_DATA_REQ_INTERRUPT  (1 << 2)
+
 
 #endif

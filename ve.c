@@ -264,6 +264,11 @@ void cedarv_memcpy(CEDARV_MEMORY dst, size_t offset, const void * src, size_t le
 {
   ump_write(dst.mem_id, offset, src, len);
 }
+void cedarv_memset(CEDARV_MEMORY dst, unsigned char value, size_t len)
+{
+  void* mem = ump_mapped_pointer_get(dst.mem_id);
+  memset(mem, value, len);
+}
 void* cedarv_getPointer(CEDARV_MEMORY mem)
 {
   return ump_mapped_pointer_get(mem.mem_id);
