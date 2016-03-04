@@ -50,6 +50,8 @@ static EGLContext eglSharedContext = EGL_NO_CONTEXT;
 static EGLContext eglContext = EGL_NO_CONTEXT;
 static EGLSurface    eglSurface = EGL_NO_SURFACE;
 
+static void (*Log)(int loglevel, const char *format, ...);
+
 void glVDPAUUnmapSurfacesNV(GLsizei numSurfaces, const vdpauSurfaceNV *surfaces);
 
 static int TestEGLError(const char* pszLocation){
@@ -74,10 +76,12 @@ VdpStatus vdp_device_opengles_nv_open(EGLDisplay _eglDisplay, VdpGetProcAddress 
   eglDisplay = _eglDisplay;
 }
 
-void glVDPAUInitNV(const void *vdpDevice, const void *getProcAddress, EGLContext shared_context)
+void glVDPAUInitNV(const void *vdpDevice, const void *getProcAddress, EGLContext shared_context,
+                   void (*_Log)(int loglevel, const char *format, ...))
 {
    eglSharedContext = shared_context;
-   
+   Log = _Log;
+
    peglCreateImageKHR =
     (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
  
@@ -354,8 +358,10 @@ void glVDPAUMapSurfacesNV(GLsizei numSurfaces, const vdpauSurfaceNV *surfaces)
     video_surface_ctx_t *vs = handle_get(nv->surface);
     assert(vs);
 
+    //Log(0, "glVDPAUMapSurfacesNV: starting MB2Yuv planar convert");
     cedarv_disp_convertMb2Yuv420(nv->conv_width, nv->conv_height,
                             vs->dataY, vs->dataU, nv->convY, nv->convU, nv->convV);
+    //Log(0, "glVDPAUMapSurfacesNV: finished MB2Yuv planar convert");
 
     for(i = 0; (nv->vdpNvState == VdpauNVState_Registered) && (i < nv->numTextureNames); i++)
     {
@@ -397,7 +403,7 @@ void glVDPAUMapSurfacesNV(GLsizei numSurfaces, const vdpauSurfaceNV *surfaces)
       assert (iErr == EGL_SUCCESS);
       pglEGLImageTargetTexture2DOES(GL_TEXTURE_2D, (GLeglImageOES)nv->eglImage[i]);
       iErr = glGetError();
-      //assert (iErr == GL_NO_ERROR);
+      assert (iErr == GL_NO_ERROR);
     }
     handle_release(nv->surface);
     nv->vdpNvState = VdpauNVState_Mapped;
