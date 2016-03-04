@@ -76,6 +76,9 @@ VdpStatus vdp_decoder_create(VdpDevice device, VdpDecoderProfile profile, uint32
         ret = new_decoder_mpeg4(dec);
         break;
     case VDP_DECODER_PROFILE_DIVX3_HD_1080P:
+    case VDP_DECODER_PROFILE_DIVX3_QMOBILE:
+    case VDP_DECODER_PROFILE_DIVX3_MOBILE:
+    case VDP_DECODER_PROFILE_DIVX3_HOME_THEATER:
         ret = new_decoder_msmpeg4(dec);
         break;
     default:
