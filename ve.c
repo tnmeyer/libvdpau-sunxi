@@ -27,8 +27,6 @@
 #include <sys/mman.h>
 #include "ve.h"
 
-#include <valgrind/ammt_reqs.h>
-
 #define DEVICE "/dev/cedar_dev"
 #define PAGE_OFFSET (0xc0000000) // from kernel
 #define PAGE_SIZE (4096)
@@ -136,10 +134,6 @@ int cedarv_open(void)
 	     ve.first_memchunk.phys_addr = info.reserved_mem - PAGE_OFFSET;
 	     ve.first_memchunk.size = info.reserved_mem_size;
 #endif
-
-             VALGRIND_PRINTF("regs base addreess=%p\n", ve.regs);
-
-             AMMT_SET_REGS_BASE(ve.regs);
 
 	     ioctl(ve.fd, IOCTL_ENGINE_REQ, 0);
              ioctl(ve.fd, IOCTL_ENABLE_VE, 0);
