@@ -403,7 +403,7 @@ void glVDPAUMapSurfacesNV(GLsizei numSurfaces, const vdpauSurfaceNV *surfaces)
       assert (iErr == EGL_SUCCESS);
       pglEGLImageTargetTexture2DOES(GL_TEXTURE_2D, (GLeglImageOES)nv->eglImage[i]);
       iErr = glGetError();
-      assert (iErr == GL_NO_ERROR);
+//      assert (iErr == GL_NO_ERROR);
     }
     handle_release(nv->surface);
     nv->vdpNvState = VdpauNVState_Mapped;
