@@ -791,13 +791,13 @@ static VdpStatus h264_decode(decoder_ctx_t *decoder, VdpPictureInfo const *_info
 	c->info = info;
 	c->output = output;
 
+	// create extra buffer
+	output_p = calloc(1, sizeof(h264_video_private_t));
+	if (!output_p)
+		return VDP_STATUS_RESOURCES;
+
 	if (!c->output->decoder_private)
 	{
-		output_p = calloc(1, sizeof(h264_video_private_t));
-		if (!output_p)
-			return VDP_STATUS_RESOURCES;
-
-		// create extra buffer
         int MvColBufSize = (c->picture_height_in_mbs_minus1 + 1)*(2 - c->info->frame_mbs_only_flag);
         MvColBufSize = (MvColBufSize+1)/2;
         output_p->extra_data_len = (c->picture_width_in_mbs_minus1 + 1) * MvColBufSize * 32 * 2;
